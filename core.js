@@ -1,0 +1,1623 @@
+/* =====================================================================
+ * 콩쿠르 운영 시스템 — 핵심 로직 (core.js)
+ * 구글 Apps Script(서버)와 브라우저 데모 모드가 같은 코드를 함께 씁니다.
+ * 저장소(store)만 바꿔 끼우는 구조: 구글시트 ↔ 브라우저 localStorage
+ *
+ * 흐름: 접수 → 입금대조 → 조편성·시간표 → 본인조회·접수증 → 현장 출석·추첨
+ *       → 심사위원 채점(예선 O/X, 본선 등위) → 자동집계 → 결과 공개
+ * ===================================================================== */
+var KC = (function () {
+  'use strict';
+
+  var SCHEMA = {
+    Config: ['key', 'value'],
+    Groups: ['groupKey', 'division', 'category', 'sort', 'r1Cutline', 'awardCount', 'note', 'perSec', 'groupSize', 'perSec2', 'groupSize2', 'awardNote', 'prizes'],
+    Participants: ['id', 'name', 'birth', 'gender', 'phone', 'guardianName', 'guardianPhone', 'email', 'zip', 'address', 'region',
+      'school', 'grade', 'division', 'category', 'groupKey', 'appliedAt', 'payStatus', 'payMemo',
+      'teacher', 'pieces', 'piecesAt', 'token', 'status', 'note'],
+    Sessions: ['sessionId', 'round', 'groupKey', 'no', 'label', 'date', 'drawTime', 'startTime', 'endTime',
+      'venue', 'perSec', 'locked', 'current'],
+    Entries: ['entryId', 'round', 'pid', 'sessionId', 'seq', 'drawNo', 'attend', 'checkinAt', 'pass', 'note', 'award'],
+    Judges: ['judgeId', 'name', 'affiliation', 'pin', 'round', 'groups', 'seat', 'staffId', 'dates'],
+    Scores: ['scoreId', 'round', 'pid', 'sessionId', 'judgeId', 'value', 'comment', 'updatedAt'],
+    Submissions: ['subId', 'sessionId', 'judgeId', 'submittedAt'],
+    Logs: ['time', 'actor', 'action', 'detail'],
+    // 시간표 설계: 날짜(경연일) 하루가 한 줄. blocks = 그날 들어갈 부문 목록(JSON)
+    Plan: ['dayId', 'round', 'date', 'start', 'amEnd', 'pmStart', 'lunchMin', 'gap', 'venue', 'piano', 'note', 'blocks'],
+    // 심사위원·진행요원 — 본인이 링크로 들어와 정보 입력. 주민번호·계좌번호는 브라우저에서 암호화된 값(E1.…)만 저장
+    Staff: ['staffId', 'kind', 'name', 'affiliation', 'title', 'orgHead', 'phone', 'email', 'birth', 'zip', 'address',
+      'bank', 'holder', 'accountMask', 'accountEnc', 'rrnMask', 'rrnEnc', 'idFile', 'bankFile', 'sign', 'idCheck',
+      'agreeAt', 'pledgeAt', 'contractAt', 'submittedAt', 'token', 'status', 'wage', 'nameEn', 'note', 'updatedAt'],
+    // 진행요원 근무일 — plan(예정, 계약서 근로일별 근로시간) / start·end(실제, 인건비)
+    Work: ['workId', 'staffId', 'date', 'planStart', 'planEnd', 'start', 'end', 'breakMin', 'role', 'note'],
+    // 입상자 상금 수령 정보
+    Prizes: ['pid', 'holderType', 'holder', 'relation', 'bank', 'accountMask', 'accountEnc', 'rrnMask', 'rrnEnc',
+      'bankFile', 'familyFile', 'idCheck', 'attend', 'attendCount', 'mailAddress', 'agreeAt', 'submittedAt', 'amount', 'status', 'note'],
+    // 참가자 신청 (공결공문 등)
+    Requests: ['reqId', 'pid', 'kind', 'recipient', 'attn', 'target', 'accompName', 'note', 'status', 'reply', 'docId', 'createdAt', 'decidedAt'],
+    // 발급대장 — 공문·확인서 번호와 만든 파일
+    Docs: ['docId', 'kind', 'series', 'docNo', 'title', 'target', 'refId', 'fileId', 'pdfId', 'url', 'createdAt', 'status', 'fields']
+  };
+  var KEYS = {
+    Config: 'key', Groups: 'groupKey', Participants: 'id', Sessions: 'sessionId', Entries: 'entryId',
+    Judges: 'judgeId', Scores: 'scoreId', Submissions: 'subId', Plan: 'dayId',
+    Staff: 'staffId', Work: 'workId', Prizes: 'pid', Requests: 'reqId', Docs: 'docId'
+  };
+
+  var DEFAULT_CONFIG = {
+    title: '제76회 이화경향음악콩쿠르',
+    shortTitle: '이화경향음악콩쿠르',
+    organizer: '경향신문사',
+    contact: '경향신문 문화사업국 02-3701-1602',
+    venue: '이화여자고등학교',
+    themeColor: '#8a1c3c',
+    fee: '200000',
+    adminPassword: '',
+    deskPin: '',
+    // 라운드 설정 — mode: ox(O/X 개수) | rank(등위, 낮을수록 상위) | score(점수, 높을수록 상위)
+    r1Name: '예선', r1Mode: 'ox', r1Judges: '5', r1Max: '1', r1Drop: '0',
+    r2Name: '본선', r2Mode: 'rank', r2Judges: '7', r2Max: '5', r2Drop: '1',
+    perSec: '200',          // 1인 배당시간(초) 3분20초
+    drawLeadMin: '30',      // 경연 시작 몇 분 전에 추첨하는지
+    // 시간표 설계 기본값 (75회 방식)
+    roundMin: '5',          // 조 경연시간을 몇 분 단위로 올림 (20명×3분20초=66분40초 → 70분)
+    sessionGap: '10',       // 조와 조 사이 쉬는 시간(분)
+    amEnd: '12:00',         // 오전 조가 이 시각 전에 끝나도록 조 인원을 줄임
+    pmStart: '13:00',       // 오후 첫 조 시작 (점심 최소 lunchMin 분 보장)
+    lunchMin: '60',
+    minGroupSize: '6',      // 오전 마감 전에 이보다 적게 들어가면 그냥 점심으로 넘김
+    dayLatest: '18:00',     // 이보다 늦게 끝나면 경고
+    calendarNote: '',       // 달력형 시간표 아래 메모 (예: 전국연합학력평가 일정)
+    pubCountR1: 'N',        // 공개용 시간표에 인원 표시 — 예선은 안 적음
+    pubCountR2: 'Y',        // 본선 배포용은 조별 인원 적음
+    // ── 홈페이지 공지사항 양식 (기존 방식 병행) — {대회명} {부문} {구분} {본선일자} {문의시작} {인터뷰마감} 은 자동으로 채워짐
+    noticeR1Body: '{대회명} 참가자 여러분께 감사드립니다.\n부문별 예선 조편성과 소집 시간, 경연 참관 및 참가자 유의사항을 아래와 같이 공지합니다.\n*경연장\n- 이화여고 백주년기념관(서울 중구 정동)\n   도로명 주소 : 서울시 중구 정동길 26 이화여자고등학교 백주년기념관\n- 예·본선 경연장에는 주차 공간이 없습니다. 주변 유료 주차장을 이용해 주시기 바랍니다.\n*경연 참관 안내\n- 예·본선은 공개로 진행됩니다. (참관은 해당 경연 시작 10분 전까지 오셔야 합니다.)\n*참가자 유의사항\n- 참가자들은 각 부문 조별 ‘연주 순서 추첨’ 시간까지 경연장에 도착해야 합니다. 도착이 늦어 연주 순서 추첨을 못하면 경연에 참가하지 못하거나 불이익을 받을 수 있습니다.\n- 복장은 교복을 제외한 자유복으로 제한합니다. 교복은 상의 또는 하의만 입어도 경연 참가가 허락되지 않습니다.\n{부문안내}\n*본선 진출자 명단은 해당 부문 경연이 모두 끝난 날 집계 후 저녁 시간에 이화경향음악콩쿠르 홈페이지를 통해 공지합니다.\n*경연 시작 시간은 진행 상황에 따라 변경될 수 있습니다.\n(성명은 가나다 순, 동명이인의 경우 출생 연월(예시 1209**)으로 표기했습니다.)',
+    noticeDivisionLines: '성악=부득이하게 곡을 변경하셔야 하는 경우에는 현장에 오셔서 말씀해 주시길 바랍니다.', // 부문별 추가 안내 (부문=문구, 줄마다 하나)
+    noticeFinalistBody: '{대회명} {부문} {구분} 본선 진출자를 아래와 같이 발표합니다.\n\n{명단}\n\n*본선 안내\n1. 일시 : {본선일자} (경연 시간은 추후 홈페이지에 공지합니다.)\n2. 장소 : 이화여고 백주년기념관 (예선과 같은 장소)\n3. 준비물\n- 재학생 : 재학증명서 1부, 학생증(또는 여권) 사본 1부\n- 졸업생·홈스쿨·휴학생 : 여권 또는 신분증 사본 1부\n*유의사항\n- 제출한 서류는 반환하지 않습니다.\n- 예선 채점은 점수제가 아닌 O⦁X 방식입니다.\n- 예선 심사평은 없으며, 예선 결과 문의는 {문의시작} 이후에 받습니다.\n*촬영 및 영상 활용 동의서(반주자 포함)를 출력해 작성한 뒤 본선 당일 지참해 주시기 바랍니다.',
+    noticeFinalGuideBody: '{대회명} {부문} 부문 본선 진출을 축하드립니다.\n*경연일 : {본선일자}\n*소집시간 : 아래 부문별 조편성과 시간표를 확인해 주시기 바랍니다.\n*경연장소 : 이화여고 백주년기념관 (예선 장소와 동일)\n*주의사항\n- 조별 경연 시작 30분 전까지 도착해 주시기 바랍니다.\n- 복장은 교복을 제외한 자유복입니다.\n*준비물\n- 재학생 : 재학증명서 1부, 학생증(또는 여권) 사본 1부\n- 졸업생·홈스쿨·휴학생 : 여권 또는 신분증 사본 1부\n- 제출한 서류는 반환하지 않습니다.\n*촬영 및 영상 활용 동의서(반주자 포함)를 출력해 당일 지참해 주시기 바랍니다.\n*연주 시간에 따라 경연 시작 시간이 바뀔 수 있습니다.\n\n{시간표}\n\n{명단}',
+    noticeWinnersBody: '{대회명} {부문} 부문 입상자를 아래와 같이 발표합니다.\n\n{입상자}\n\n*각 부문 1위 입상자는 첨부한 인터뷰지를 작성해 {인터뷰마감}까지 info@khan.kr 메일로 보내 주시기 바랍니다.\n*입상자 시상식 일정은 추후 공지하겠습니다.',
+    noticeInquiryFrom: '',   // 예선 결과 문의 받는 날 (예: 4월 28일(화))
+    noticeInterviewDue: '',  // 1위 인터뷰지 제출 마감 (예: 4월 16일 오후 6시)
+    perSec2: '420',         // 본선 1인 기본 시간(초) — 부문별로 따로 정함 (75회: 초 7분·중 8분·고 20분)
+    groupSize2: '7',        // 본선 조당 기본 인원
+    groupSize: '20',        // 조당 기본 인원
+    splitByGender: '성악',   // 남/여를 나눠 편성하는 부문(쉼표로 여러 개)
+    // 지방 참가자 배치: 오전·오후로 조가 나뉠 때 이 지역 참가자는 오후 조에, 단 그날 마지막 조는 피해서
+    farRegions: '강원,충북,충남,대전,세종,전북,전남,광주,경북,경남,대구,울산,부산,제주',
+    farExceptions: '춘천',  // 지방 시·도 안이라도 주소에 이 지명이 있으면 지방으로 안 봄 (쉼표)
+    afternoonFrom: '12:00',  // 이 시각 이후 시작하는 조를 '오후 조'로 봄
+    showNamesToJudges: 'N', // 심사위원 화면에 이름 표시 여부
+    showPiecesToJudges: 'Y', // 심사위원 화면에 곡목 표시 (성악처럼 참가자가 곡을 고르는 부문)
+    // 참가자 본인 곡목 수정 — 규칙이 정해지면 여기서 켜고 끔
+    pieceEditR1: 'N',        // 예선 곡목 수정 허용
+    pieceEditR2: 'N',        // 본선 곡목 수정 허용 (예선 결과 공개 후, 본선 진출자만)
+    pieceEditUntil: '',      // 수정 마감 일시 (예: 2027-04-05 18:00). 비우면 그 라운드 채점 시작 전까지
+    pieceEditDivisions: '성악', // 수정 가능한 부문 (쉼표로 여러 개, 비우면 전체)
+    pieceReorder: 'Y',       // 참가자가 곡 순서(①②③)를 바꿀 수 있는지
+    showCutline: 'Y',       // 본인조회에서 예선 커트라인 안내 여부
+    publishR1Schedule: 'N', publishR1Result: 'N', publishR2Schedule: 'N', publishR2Result: 'N',
+    notice: '',
+    // ── 문서·공문 (공결공문·위촉확인서·입상확인서·계약서 등)
+    eventPeriod: '',         // 비우면 경연 일정에서 자동 (예: 2027년 3월 23일 ~ 4월 15일)
+    hostLine: '경향신문사 · 이화여자고등학교',
+    venueShort: '이화여고 백주년기념관 (서울 정동)',
+    venueFull: '서울시 중구 정동길 26 이화여자고등학교 백주년기념관',
+    ceoTitle: '경향신문사 사장', ceoName: '박종성', ceoNameEn: '',
+    deptName: '경향신문 문화사업국', manager: '', phone: '02-3701-1602', fax: '', email: 'info@khan.kr',
+    companyAddress: '04518 서울특별시 중구 정동길 3', homepage: 'www.khan.co.kr',
+    docNoFormat: '경향 G{yyyy}-{MM}{NN}',  // 공문 번호 — {yyyy}{yy}{MM}{NN}
+    certNoFormat: '제 {yy}-{MM}{NN} 호',   // 위촉확인서·입상확인서 번호
+    sealOverlay: 'Y', sealSizeMm: '21', sealDxMm: '-14', sealDyMm: '-6', // 직인을 이름 끝에 겹쳐 찍기
+    awardDate: '',           // 시상일 (입상확인서)
+    gonggyeolOpen: 'N',      // 참가자 공결공문 신청 받기
+    gonggyeolNote: '신청하면 사무국 확인 후 이 화면에서 공문 PDF를 받을 수 있습니다. 수신처(학교·부대·기관)를 정확히 적어 주세요.',
+    prizeDefault: '',        // 기본 상금 (예: 1위=1000000,2위=500000,3위=300000) — 부문별은 Groups.prizes
+    prizeOpen: 'N', prizeDue: '', awardCeremony: '',  // 입상자 상금 수령 정보 입력 받기 / 마감 / 시상식 안내
+    judgeFee: '300000',      // 1일 심사비
+    hourlyWage: '10700',     // 진행요원 시급 — 2027년 최저임금 10,700원 이상
+    payDay: '근무한 달의 말일 (휴일이면 그 전날)', workPlace: '이화여고 백주년기념관 및 경향신문사',
+    workDept: '경향신문사 문화사업국', workDuty: '이화경향음악콩쿠르 진행요원', defaultBreakMin: '60',
+    taxRate: '20', localTaxRate: '10', taxPrizeExpense: '80', taxJudgeExpense: '60', taxMinIncome: '50000',
+    pubKey: '', privKeyEnc: '', collectIdCopy: 'Y', collectRrn: 'Y', // 개인정보 암호화 키 / 신분증(주민번호 보이는 것)·통장 사본은 돈을 내보내기 전 본인 확인용으로 필수
+    driveRoot: '', templates: '', sealFile: '', // 양식 설치 후 자동으로 채워짐
+    receiptNote: '경연 당일 이 접수증과 신분증(학생증)을 지참하고, 추첨 시간까지 대기실에 도착해 주세요.'
+  };
+  var PUBLIC_CONFIG_KEYS = ['title', 'shortTitle', 'organizer', 'contact', 'venue', 'themeColor', 'r1Name',
+    'r2Name', 'r1Mode', 'r2Mode', 'notice', 'receiptNote', 'publishR1Schedule', 'publishR1Result',
+    'publishR2Schedule', 'publishR2Result', 'pubKey', 'gonggyeolOpen', 'gonggyeolNote', 'prizeOpen', 'prizeDue', 'awardCeremony', 'collectRrn', 'collectIdCopy'];
+
+  /* ---------------- 공통 유틸 ---------------- */
+  function fail(msg) { var e = new Error(msg); e.userFacing = true; throw e; }
+  function s(v) { return v == null ? '' : String(v).trim(); }
+  function digits(v) { return s(v).replace(/\D/g, ''); }
+  function normBirth(v) {
+    var d = digits(v);
+    if (d.length === 8) d = d.slice(2);
+    if (d.length === 5) d = '0' + d;
+    return d;
+  }
+  function normPhone(v) { var d = digits(v); return d.length < 7 ? '' : d; }
+  function genderShort(g) { g = s(g); if (/남/.test(g)) return '남'; if (/여/.test(g)) return '여'; return ''; }
+  function isPaid(p) { return /입금\s*확인|입금완료|결제\s*완료|^Y$|^완료$/.test(s(p.payStatus)); }
+  function isActive(p) { return !/취소|환불|삭제/.test(s(p.status)); }
+  function cmpKo(a, b) { return String(a).localeCompare(String(b), 'ko'); }
+  function toMin(t) { var m = /^(\d{1,2}):(\d{2})/.exec(s(t)); return m ? (+m[1]) * 60 + (+m[2]) : null; }
+  function fromMin(n) { n = ((n % 1440) + 1440) % 1440; var h = Math.floor(n / 60), m = n % 60; return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m; }
+  function normDate(v) {
+    var m = /(\d{4})\D+(\d{1,2})\D+(\d{1,2})/.exec(s(v));
+    if (!m) return s(v);
+    return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+  }
+  function normTime(v) { var n = toMin(v); return n == null ? '' : fromMin(n); }
+  function splitList(v) { return s(v).split(/[,，、/\s]+/).map(s).filter(Boolean); }
+  function randToken() {
+    var c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', t = '';
+    for (var i = 0; i < 10; i++) t += c.charAt(Math.floor(Math.random() * c.length));
+    return t;
+  }
+
+  // '성악(여)' 처럼 부문에 성별이 붙어 오면 떼어 냄
+  function splitDivision(division) {
+    var m = /^(.*?)\s*\((남|여)\)\s*$/.exec(s(division));
+    return m ? { division: m[1], gender: m[2] } : { division: s(division), gender: '' };
+  }
+  // '대학·일반부' → '대학일반부' (회차마다 표기가 달라도 같은 부문으로)
+  function normCategory(c) { return s(c).replace(/[·ㆍ・\s]/g, ''); }
+
+  /* ---------- 시도 판별 (주소 → 없으면 우편번호 앞 2자리) ---------- */
+  var REGION_WORDS = [['서울', '서울'], ['경기', '경기'], ['인천', '인천'], ['강원', '강원'], ['충북', '충북'], ['충청북', '충북'], ['충남', '충남'], ['충청남', '충남'],
+    ['대전', '대전'], ['세종', '세종'], ['전북', '전북'], ['전라북', '전북'], ['전남', '전남'], ['전라남', '전남'], ['광주', '광주'], ['경북', '경북'], ['경상북', '경북'],
+    ['경남', '경남'], ['경상남', '경남'], ['대구', '대구'], ['울산', '울산'], ['부산', '부산'], ['제주', '제주']];
+  var ZIP_REGION = [[1, 9, '서울'], [10, 20, '경기'], [21, 23, '인천'], [24, 26, '강원'], [27, 29, '충북'], [30, 30, '세종'], [31, 33, '충남'], [34, 35, '대전'], [36, 40, '경북'],
+    [41, 43, '대구'], [44, 45, '울산'], [46, 49, '부산'], [50, 53, '경남'], [54, 56, '전북'], [57, 60, '전남'], [61, 62, '광주'], [63, 63, '제주']];
+  function regionOf(address, zip) {
+    var first = s(address).split(/\s+/)[0] || '';
+    for (var i = 0; i < REGION_WORDS.length; i++) if (first.indexOf(REGION_WORDS[i][0]) === 0) return REGION_WORDS[i][1];
+    // 경기 광주시는 '경기 광주시…'로 시작하므로 위에서 경기로 잡힘
+    var z = digits(zip);
+    if (z.length === 5) {
+      var n = +z.slice(0, 2);
+      for (var k = 0; k < ZIP_REGION.length; k++) if (n >= ZIP_REGION[k][0] && n <= ZIP_REGION[k][1]) return ZIP_REGION[k][2];
+    }
+    return '';
+  }
+  function isFar(cfg, p) {
+    var r = s(p.region) || regionOf(p.address, p.zip);
+    if (!r || splitList(cfg.farRegions).indexOf(r) < 0) return false;
+    var addr = s(p.address);
+    return !splitList(cfg.farExceptions).some(function (x) { return addr.indexOf(x) >= 0; }); // 예: 강원이라도 춘천은 지방 아님
+  }
+
+  /* ---------------- 시간표 설계 ----------------
+   * 하루(day) = {date, start, amEnd, pmStart, lunchMin, gap, blocks:[{groupKey, count, perSec, size, pmOnly, sizes}]}
+   * 75회 방식: 조 경연시간은 roundMin 분 단위 올림, 조 사이 gap 분, 오전 조는 amEnd 전에 끝나게 인원을 줄이고,
+   * 점심은 마지막 오전 조가 끝난 뒤 최소 lunchMin 분, 오후는 pmStart 이후 시작 */
+  function durMin(cfg, n, perSec) { var u = +cfg.roundMin || 5; return Math.ceil(n * perSec / 60 / u - 1e-9) * u; }
+  function parseSec(v) {
+    v = s(v); if (!v) return 0;
+    var m = /^(\d+)\s*[:분']\s*(\d+)?/.exec(v); if (m) return (+m[1]) * 60 + (+(m[2] || 0));
+    var n = +v; return n > 20 ? n : n * 60; // 200 → 200초, 3 → 3분
+  }
+  function fmtSec(sec) { sec = Math.round(+sec || 0); var m = Math.floor(sec / 60), r = sec % 60; return m + '분' + (r ? r + '초' : ''); }
+  function parseBlocks(v) { if (Array.isArray(v)) return v; try { var a = JSON.parse(s(v) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+  function planDay(cfg, day) {
+    var gap = s(day.gap) !== '' ? +day.gap : (+cfg.sessionGap || 10);
+    var lunchMin = +day.lunchMin || +cfg.lunchMin || 60, lead = +cfg.drawLeadMin || 30, minSize = +cfg.minGroupSize || 6;
+    var t = toMin(day.start || '09:30'), amEnd = toMin(day.amEnd || cfg.amEnd || '12:00'), pmStart = toMin(day.pmStart || cfg.pmStart || '13:00');
+    var items = [], warn = [], prevEnd = null, lunchDone = t >= amEnd;
+    function lunch() {
+      if (lunchDone) return;
+      var ls = prevEnd != null ? prevEnd : t, le = Math.max(ls + lunchMin, pmStart);
+      if (prevEnd != null) items.push({ type: 'lunch', start: fromMin(ls), end: fromMin(le) });
+      t = Math.max(t, le); lunchDone = true;
+    }
+    parseBlocks(day.blocks).forEach(function (b) {
+      var per = parseSec(b.perSec) || +cfg.perSec || 200, size = +b.size || +cfg.groupSize || 20, rem = +b.count || 0;
+      var sizes = s(b.sizes).split(/[^\d]+/).filter(Boolean).map(Number), si = 0, guard = 0;
+      if (b.pmOnly && !lunchDone) lunch();
+      while (rem > 0 && guard++ < 200) {
+        var want = Math.min(sizes.length ? (sizes[si] || size) : size, rem);
+        if (!lunchDone) {
+          var avail = amEnd - t, k = want;
+          while (k > 0 && durMin(cfg, k, per) > avail) k--;
+          if (sizes.length ? k < want : k < Math.min(want, minSize)) { lunch(); continue; }
+          want = k;
+        }
+        var d = durMin(cfg, want, per);
+        items.push({ type: 'session', groupKey: s(b.groupKey), n: want, start: fromMin(t), end: fromMin(t + d), dur: d, perSec: per, draw: fromMin(t - lead) });
+        prevEnd = t + d; t = prevEnd + gap; rem -= want; si++;
+      }
+    });
+    var end = prevEnd != null ? fromMin(prevEnd) : '';
+    if (end && toMin(end) > toMin(cfg.dayLatest || '18:00')) warn.push('끝나는 시각이 ' + end + '로 늦어요');
+    return { items: items, start: items.length ? items.filter(function (x) { return x.type === 'session'; })[0].start : '', end: end, warn: warn };
+  }
+  // 여러 날을 이어서: 조 번호는 같은 부문 안에서 날짜를 넘어 이어짐 (예: 피아노 초등부 8조는 다음 날 오전)
+  function planAll(cfg, days) {
+    var out = days.slice().sort(function (a, b) { return cmpKo(a.date + (a.start || ''), b.date + (b.start || '')); }).map(function (d) {
+      var r = planDay(cfg, d); r.day = d; return r;
+    });
+    var no = {}, tot = {};
+    out.forEach(function (r) { r.items.forEach(function (x) { if (x.type === 'session') { no[x.groupKey] = (no[x.groupKey] || 0) + 1; x.no = no[x.groupKey]; tot[x.groupKey] = (tot[x.groupKey] || 0) + x.n; } }); });
+    return { days: out, totals: tot };
+  }
+  function makeGroupKey(cfg, division, category, gender) {
+    var sd = splitDivision(division);
+    division = sd.division; category = normCategory(category);
+    var split = splitList(cfg.splitByGender);
+    var g = genderShort(gender) || sd.gender;
+    if (split.indexOf(division) >= 0 && g && !/\((남|여)\)/.test(category)) category = category + '(' + g + ')';
+    return division + '|' + category;
+  }
+  /* ---------- 곡목 (성악 등 참가자 자유곡) ----------
+   * Participants.pieces 에 JSON 배열로 저장
+   * [{round:'R1', kind:'가곡', country:'이태리', composer:'Tosti', title:'Ideale'}, …]  순서 = ①②③ */
+  function parsePieces(v) {
+    if (Array.isArray(v)) return v;
+    var t = s(v);
+    if (!t) return [];
+    if (t.charAt(0) === '[') { try { var a = JSON.parse(t); return Array.isArray(a) ? a : []; } catch (e) { } }
+    return [{ round: '', kind: '', country: '', composer: '', title: t }];
+  }
+  function normPieces(v) {
+    var arr = parsePieces(v).map(function (x) {
+      var clean = function (z) { z = s(z); return z === '0' ? '' : z; };
+      return { round: s(x.round) === 'R2' ? 'R2' : (s(x.round) === 'R1' ? 'R1' : ''), kind: clean(x.kind), country: clean(x.country), composer: clean(x.composer), title: clean(x.title) };
+    }).filter(function (x) { return x.title || x.composer; });
+    return arr.length ? JSON.stringify(arr) : '';
+  }
+  function piecesFor(p, round) {
+    var all = parsePieces(p && p.pieces);
+    var r = all.filter(function (x) { return x.round === round; });
+    return r.length ? r : all.filter(function (x) { return !x.round; });
+  }
+  function pieceLine(x) { return [x.country, x.composer, x.title].filter(Boolean).join(' / '); }
+  function piecesText(list) {
+    var mark = '①②③④⑤⑥';
+    return list.map(function (x, i) { return mark.charAt(i) + ' ' + (x.kind ? x.kind + ': ' : '') + pieceLine(x); }).join('  ');
+  }
+
+  function groupLabel(groupKey) { var p = s(groupKey).split('|'); return p[0] + ' ' + (p[1] || ''); }
+
+  function roundCfg(cfg, round) {
+    var p = round === 'R2' ? 'r2' : 'r1';
+    return {
+      round: round, name: cfg[p + 'Name'], mode: cfg[p + 'Mode'] || 'ox',
+      judges: +cfg[p + 'Judges'] || 0, max: +cfg[p + 'Max'] || (cfg[p + 'Mode'] === 'rank' ? 5 : 1),
+      drop: +cfg[p + 'Drop'] || 0
+    };
+  }
+
+  /* ---------------- DB 컨텍스트 (요청 1회 동안 캐시) ---------------- */
+  function makeDb(store) {
+    var cache = {};
+    var db = {
+      store: store,
+      t: function (name) { if (!cache[name]) cache[name] = store.all(name); return cache[name]; },
+      upsert: function (name, rows) { store.upsert(name, KEYS[name], rows); delete cache[name]; },
+      replaceWhere: function (name, pred, rows) { store.replaceWhere(name, pred, rows || []); delete cache[name]; },
+      append: function (name, rows) { store.append(name, rows); delete cache[name]; },
+      log: function (actor, action, detail) {
+        store.append('Logs', [{ time: store.now(), actor: actor, action: action, detail: typeof detail === 'string' ? detail : JSON.stringify(detail) }]);
+      }
+    };
+    db.cfg = function () {
+      if (cache.__cfg) return cache.__cfg;
+      var c = {}, k;
+      for (k in DEFAULT_CONFIG) c[k] = DEFAULT_CONFIG[k];
+      db.t('Config').forEach(function (r) { if (s(r.key)) c[s(r.key)] = s(r.value); });
+      cache.__cfg = c;
+      return c;
+    };
+    db.pmap = function () {
+      if (cache.__pmap) return cache.__pmap;
+      var m = {}; db.t('Participants').forEach(function (p) { m[p.id] = p; });
+      cache.__pmap = m; return m;
+    };
+    db.invalidate = function () { cache = {}; };
+    return db;
+  }
+
+  /* ---------------- 조편성·연주순서 ---------------- */
+  function sessionsOf(db, round, groupKey) {
+    return db.t('Sessions').filter(function (x) { return x.round === round && (!groupKey || x.groupKey === groupKey); })
+      .sort(function (a, b) { return (+a.no || 0) - (+b.no || 0) || cmpKo(a.date + a.startTime, b.date + b.startTime); });
+  }
+  function entriesOf(db, round, groupKey) {
+    var pm = db.pmap();
+    return db.t('Entries').filter(function (e) { var p = pm[e.pid]; return e.round === round && p && (!groupKey || p.groupKey === groupKey); });
+  }
+  // 연주순서 = 앞 조들의 인원 합 + 조별순서(추첨번호). 74·75회 운영방식과 동일
+  function perfOrders(db, round, groupKey) {
+    var ses = sessionsOf(db, round, groupKey), ent = entriesOf(db, round, groupKey);
+    var bySes = {}, offset = 0, out = {};
+    ent.forEach(function (e) { (bySes[e.sessionId] = bySes[e.sessionId] || []).push(e); });
+    ses.forEach(function (x) {
+      var list = bySes[x.sessionId] || [];
+      list.forEach(function (e) { out[e.entryId] = s(e.drawNo) ? offset + (+e.drawNo) : null; });
+      offset += list.length;
+    });
+    return out;
+  }
+  function recalcSessionEnd(db, cfg, sessionIds) {
+    var cnt = {};
+    db.t('Entries').forEach(function (e) { cnt[e.sessionId] = (cnt[e.sessionId] || 0) + 1; });
+    var upd = [];
+    db.t('Sessions').forEach(function (x) {
+      if (sessionIds && sessionIds.indexOf(x.sessionId) < 0) return;
+      var st = toMin(x.startTime); if (st == null) return;
+      var per = +x.perSec || +cfg.perSec || 200;
+      var dur = durMin(cfg, cnt[x.sessionId] || 0, per);
+      var lead = +cfg.drawLeadMin || 30;
+      upd.push({ sessionId: x.sessionId, endTime: fromMin(st + dur), drawTime: fromMin(st - lead) });
+    });
+    if (upd.length) db.upsert('Sessions', upd);
+  }
+
+  /* ---------------- 채점 집계 ---------------- */
+  function judgeCovers(j, groupKey) {
+    var div = s(groupKey).split('|')[0], g = s(j.groups);
+    if (!g || g === '전체') return true;
+    return splitList(g.replace(/\|/g, '§')).some(function (x) { x = x.replace(/§/g, '|'); return x === groupKey || x === div; });
+  }
+  function judgesFor(db, round, groupKey) {
+    return db.t('Judges').filter(function (j) { return j.round === round && judgeCovers(j, groupKey); }).sort(function (a, b) { return (+a.seat || 99) - (+b.seat || 99) || cmpKo(a.name, b.name); });
+  }
+
+  function rankCompetition(rows, keyFn) {
+    // 같은 값이면 같은 순위(1,2,2,4…)
+    var prev = null, rank = 0, i = 0;
+    rows.forEach(function (r) {
+      i++;
+      var k = keyFn(r);
+      if (prev === null || k !== prev) { rank = i; prev = k; }
+      r.rank = rank;
+    });
+  }
+
+  function computeGroup(db, round, groupKey) {
+    var cfg = db.cfg(), rc = roundCfg(cfg, round), pm = db.pmap();
+    var ent = entriesOf(db, round, groupKey);
+    var po = perfOrders(db, round, groupKey);
+    var judges = judgesFor(db, round, groupKey);
+    var scores = db.t('Scores').filter(function (x) { return x.round === round; });
+    var byPid = {};
+    scores.forEach(function (x) { (byPid[x.pid] = byPid[x.pid] || {})[x.judgeId] = x; });
+    // 배정되지 않았지만 실제 채점한 심사위원도 포함
+    var jIds = judges.map(function (j) { return j.judgeId; });
+    var jAll = db.t('Judges');
+    ent.forEach(function (e) {
+      var m = byPid[e.pid] || {};
+      Object.keys(m).forEach(function (jid) {
+        if (jIds.indexOf(jid) < 0) {
+          jIds.push(jid);
+          var jj = jAll.filter(function (x) { return x.judgeId === jid; })[0];
+          judges.push(jj || { judgeId: jid, name: jid, seat: 99 });
+        }
+      });
+    });
+    var expected = Math.max(rc.judges, judges.length);
+    var group = db.t('Groups').filter(function (g) { return g.groupKey === groupKey; })[0] || {};
+    var rows = ent.map(function (e) {
+      var p = pm[e.pid], m = byPid[e.pid] || {};
+      var vals = judges.map(function (j) { var x = m[j.judgeId]; return x && s(x.value) !== '' ? +x.value : null; });
+      var comments = judges.map(function (j) { var x = m[j.judgeId]; return x ? s(x.comment) : ''; });
+      var nums = vals.filter(function (v) { return v !== null; });
+      var r = {
+        entryId: e.entryId, pid: e.pid, name: p.name, school: p.school, grade: p.grade, birth: p.birth,
+        sessionId: e.sessionId, seq: +e.seq || 0, drawNo: s(e.drawNo), perfOrder: po[e.entryId],
+        attend: s(e.attend), pass: s(e.pass), values: vals, comments: comments, pieces: piecesFor(p, round),
+        scored: nums.length, complete: nums.length >= expected && expected > 0
+      };
+      r.absent = r.attend === 'N';
+      if (rc.mode === 'ox') {
+        r.score = nums.reduce(function (a, b) { return a + (b > 0 ? 1 : 0); }, 0);
+        r.display = r.score + '개';
+      } else {
+        var total = nums.reduce(function (a, b) { return a + b; }, 0);
+        r.total = total;
+        var sorted = nums.slice().sort(function (a, b) { return a - b; });
+        var d = rc.drop;
+        if (d > 0 && sorted.length > 2 * d) {
+          r.dropped = sorted.slice(0, d).concat(sorted.slice(sorted.length - d));
+          r.effective = sorted.slice(d, sorted.length - d).reduce(function (a, b) { return a + b; }, 0);
+        } else r.effective = total;
+        if (rc.mode === 'score' && nums.length) r.effective = Math.round((r.effective / Math.max(1, nums.length - (sorted.length > 2 * d ? 2 * d : 0))) * 100) / 100;
+        r.score = r.effective;
+        r.display = String(r.effective);
+      }
+      return r;
+    });
+    // 순위: 불참·미완료 제외
+    var ranked = rows.filter(function (r) { return !r.absent && r.scored > 0; });
+    if (rc.mode === 'rank') {
+      // 유효등위 합 낮은 순 → 동점이면 전체 등위합(제외 전) 낮은 순 → 그래도 같으면 공동
+      ranked.sort(function (a, b) { return a.effective - b.effective || a.total - b.total; });
+      rankCompetition(ranked, function (r) { return r.effective + '/' + r.total; });
+    } else {
+      ranked.sort(function (a, b) { return b.score - a.score; });
+      rankCompetition(ranked, function (r) { return String(r.score); });
+    }
+    var awardCount = +group.awardCount || 3, rankCnt = {};
+    ranked.forEach(function (r) { rankCnt[r.rank] = (rankCnt[r.rank] || 0) + 1; });
+    var entMap = {}; ent.forEach(function (e) { entMap[e.entryId] = e; });
+    rows.forEach(function (r) {
+      if (round !== 'R2') return;
+      // 자동: 순위대로 (동점이면 '공동') / 직접 지정: 심사위원 합의로 '1위 없음', '공동 2위' 등 — '-'는 입상 안 함
+      r.awardAuto = r.rank && r.rank <= awardCount ? (rankCnt[r.rank] > 1 ? '공동 ' : '') + r.rank + '위' : '';
+      var ov = s((entMap[r.entryId] || {}).award);
+      r.awardManual = !!ov;
+      r.award = ov ? (ov === '-' ? '' : ov) : r.awardAuto;
+    });
+    rows.sort(function (a, b) {
+      var pa = a.perfOrder == null ? 9999 + a.seq : a.perfOrder, pb = b.perfOrder == null ? 9999 + b.seq : b.perfOrder;
+      return pa - pb;
+    });
+    // 분포(예선 O 개수별 인원)
+    var dist = null;
+    if (rc.mode === 'ox') {
+      dist = {};
+      for (var k = 0; k <= expected; k++) dist[k] = 0;
+      rows.forEach(function (r) { if (!r.absent && r.scored > 0) dist[r.score] = (dist[r.score] || 0) + 1; });
+    }
+    return {
+      round: round, groupKey: groupKey, label: groupLabel(groupKey), mode: rc.mode,
+      judges: judges.map(function (j, i) { return { judgeId: j.judgeId, name: j.name, seat: j.seat, letter: String.fromCharCode(65 + i) }; }),
+      expected: expected, rows: rows, dist: dist, cutline: s(group.r1Cutline), awardCount: awardCount, awardNote: s(group.awardNote),
+      total: rows.length, absent: rows.filter(function (r) { return r.absent; }).length,
+      completed: rows.filter(function (r) { return r.complete || r.absent; }).length,
+      passed: rows.filter(function (r) { return r.pass === 'Y'; }).length
+    };
+  }
+
+  function allGroupKeys(db) {
+    var keys = {};
+    db.t('Groups').forEach(function (g) { keys[g.groupKey] = +g.sort || 999; });
+    db.t('Participants').forEach(function (p) { if (!(p.groupKey in keys)) keys[p.groupKey] = 999; });
+    return Object.keys(keys).sort(function (a, b) { return keys[a] - keys[b] || cmpKo(a, b); });
+  }
+
+  /* ---------------- 입금 대조 ---------------- */
+  // deposits: [{date, amount, memo}], 적요에는 보통 '이름+생년월일6자리'가 들어옴
+  function matchDeposits(participants, deposits, fee) {
+    fee = +fee || 0;
+    var plist = participants.filter(isActive);
+    var used = {};
+    var out = { matches: [], unmatched: [], unpaid: [] };
+    deposits.forEach(function (d) {
+      var amt = +digits(d.amount) || 0;
+      if (amt <= 0) return;
+      var memo = s(d.memo).replace(/\s/g, '');
+      var hangul = (memo.match(/[가-힣]+/g) || []).join('');
+      var num = digits(memo);
+      var cands = [], level = '';
+      if (hangul) {
+        cands = plist.filter(function (p) { return p.name && hangul.indexOf(p.name.replace(/\s/g, '')) === 0; });
+        if (num.length >= 4) {
+          var strong = cands.filter(function (p) { return p.birth && (p.birth === num.slice(0, 6) || p.birth.indexOf(num) === 0 || num.indexOf(p.birth) === 0); });
+          if (strong.length >= 1) { cands = strong; level = strong.length === 1 ? '확실' : '확인필요'; }
+          else level = cands.length ? '확인필요' : '';
+        } else level = cands.length === 1 ? '이름일치' : (cands.length ? '확인필요' : '');
+      }
+      var note = [];
+      if (fee && amt !== fee) note.push(amt > fee && amt % fee === 0 ? (amt / fee) + '인분 금액' : '금액 다름(' + amt.toLocaleString() + '원)');
+      if (cands.length) {
+        cands.forEach(function (p) { if (used[p.id]) note.push(p.name + ' 중복입금 의심'); });
+        cands.forEach(function (p) { used[p.id] = true; });
+        out.matches.push({ deposit: { date: s(d.date), amount: amt, memo: s(d.memo) }, pids: cands.map(function (p) { return p.id; }), level: level || '확인필요', note: note.join(', ') });
+      } else out.unmatched.push({ date: s(d.date), amount: amt, memo: s(d.memo), note: note.join(', ') });
+    });
+    plist.forEach(function (p) { if (!used[p.id] && !isPaid(p)) out.unpaid.push(p.id); });
+    return out;
+  }
+
+  /* ---------------- 인증 ---------------- */
+  function issueToken(db, payload) {
+    var tk = db.store.uid();
+    db.store.cachePut('tk_' + tk, JSON.stringify(payload), 6 * 3600);
+    return tk;
+  }
+  function readToken(db, tk) {
+    if (!tk) return null;
+    var v = db.store.cacheGet('tk_' + tk);
+    return v ? JSON.parse(v) : null;
+  }
+
+  function judgeOf(db, auth) {
+    var j = db.t('Judges').filter(function (x) { return x.judgeId === auth.judgeId; })[0];
+    if (!j) fail('심사위원 정보가 없습니다. 다시 로그인해 주세요.');
+    return j;
+  }
+  function judgeCanSee(db, j, session) {
+    if (session.round !== j.round) return false;
+    return judgesFor(db, j.round, session.groupKey).some(function (x) { return x.judgeId === j.judgeId; });
+  }
+
+  /* ---------------- 본인 확인 ---------------- */
+  function findSelf(db, p) {
+    var name = s(p.name).replace(/\s/g, ''), birth = normBirth(p.birth), ph = digits(p.phone4).slice(-4), id = s(p.id);
+    if (!(name || id) || birth.length !== 6 || ph.length !== 4) fail('이름(또는 접수번호), 생년월일 6자리, 휴대폰 뒷 4자리를 모두 입력해 주세요.');
+    var hits = db.t('Participants').filter(function (q) {
+      if (!isActive(q)) return false;
+      if (id && s(q.id) !== id) return false;
+      if (!id && s(q.name).replace(/\s/g, '').replace(/\d|\*/g, '') !== name) return false;
+      if (q.birth !== birth) return false;
+      return [q.phone, q.guardianPhone].some(function (x) { return x && digits(x).slice(-4) === ph; });
+    });
+    if (!hits.length) fail('일치하는 참가자가 없습니다. 입력한 정보를 다시 확인하거나 사무국에 문의해 주세요.');
+    return hits;
+  }
+
+  /* ---------------- 참가자 곡목 수정 가능 여부 ----------------
+   * null = 화면에 아예 안 보임, {open:false, reason} = 마감 안내, {open:true, until} = 수정 가능 */
+  function pieceEditState(db, p, round) {
+    var cfg = db.cfg(), n = round === 'R2' ? '2' : '1';
+    if (cfg['pieceEditR' + n] !== 'Y') return null;
+    var divs = splitList(cfg.pieceEditDivisions);
+    if (divs.length && divs.indexOf(splitDivision(p.division).division) < 0) return null;
+    var e1 = db.t('Entries').filter(function (e) { return e.round === 'R1' && e.pid === p.id; })[0];
+    var e2 = db.t('Entries').filter(function (e) { return e.round === 'R2' && e.pid === p.id; })[0];
+    if (round === 'R2') {
+      // 예선 결과가 공개되기 전에는 버튼만으로 합격 여부가 드러나지 않도록 숨김
+      var eligible = (cfg.publishR1Result === 'Y' && e1 && e1.pass === 'Y') || (e2 && cfg.publishR2Schedule === 'Y');
+      if (!eligible) return null;
+    }
+    var until = s(cfg.pieceEditUntil);
+    if (until && /^\d{4}-\d{2}-\d{2}$/.test(until)) until += ' 23:59:59';
+    if (until && db.store.now() > until) return { open: false, reason: '곡목 수정 기간이 끝났습니다 (' + s(cfg.pieceEditUntil) + ' 마감)' };
+    var started = db.t('Scores').some(function (x) { return x.round === round && x.pid === p.id && s(x.value) !== ''; });
+    if (started) return { open: false, reason: '심사가 시작되어 곡목을 바꿀 수 없습니다' };
+    return { open: true, until: s(cfg.pieceEditUntil), reorder: cfg.pieceReorder !== 'N' };
+  }
+
+  /* ---------------- 참가자 본인조회 응답 ---------------- */
+  function sessionView(x) {
+    if (!x) return null;
+    return { sessionId: x.sessionId, label: x.label, no: x.no, date: x.date, drawTime: x.drawTime, startTime: x.startTime, endTime: x.endTime, venue: x.venue };
+  }
+  function participantView(db, p) {
+    var cfg = db.cfg();
+    var out = {
+      id: p.id, name: p.name, birth: p.birth, school: p.school, grade: p.grade, division: p.division,
+      category: p.category, groupKey: p.groupKey, groupLabel: groupLabel(p.groupKey), paid: isPaid(p),
+      status: p.status, token: p.token, rounds: {}
+    };
+    ['R1', 'R2'].forEach(function (round) {
+      var n = round === 'R1' ? '1' : '2';
+      var e = db.t('Entries').filter(function (x) { return x.round === round && x.pid === p.id; })[0];
+      if (!e) return;
+      var r = { name: roundCfg(cfg, round).name, pieces: piecesFor(p, round) };
+      if (cfg['publishR' + n + 'Schedule'] === 'Y') {
+        var x = db.t('Sessions').filter(function (q) { return q.sessionId === e.sessionId; })[0];
+        r.session = sessionView(x);
+        r.seq = e.seq;
+        var po = perfOrders(db, round, p.groupKey);
+        r.drawNo = s(e.drawNo);
+        r.perfOrder = po[e.entryId];
+      }
+      if (cfg['publishR' + n + 'Result'] === 'Y') {
+        var g = computeGroup(db, round, p.groupKey);
+        var row = g.rows.filter(function (q) { return q.entryId === e.entryId; })[0];
+        if (row && (row.absent || row.scored > 0)) {
+          if (row.absent) r.result = { absent: true };
+          else if (g.mode === 'ox') {
+            r.result = { mode: 'ox', count: row.score, of: g.expected, pass: row.pass === 'Y' };
+            if (cfg.showCutline === 'Y' && g.cutline) r.result.cutline = +g.cutline;
+          } else {
+            r.result = { mode: g.mode, values: row.values, total: row.total, effective: row.effective, rank: row.rank, award: row.award || '', of: g.rows.filter(function (q) { return !q.absent; }).length };
+          }
+        }
+      }
+      out.rounds[round] = r;
+    });
+    out.pieces = { R1: piecesFor(p, 'R1'), R2: piecesFor(p, 'R2') };
+    out.pieceEdit = { R1: pieceEditState(db, p, 'R1'), R2: pieceEditState(db, p, 'R2') };
+    out.piecesAt = s(p.piecesAt);
+    out.requestOpen = cfg.gonggyeolOpen === 'Y';
+    out.requests = myRequests(db, p.id);
+    var r2v = out.rounds.R2;
+    if (r2v && r2v.result && r2v.result.award) out.prize = prizeView(db, p, r2v.result.award);
+    return out;
+  }
+
+  /* ---------------- 요청 처리기 ---------------- */
+  var A = {};
+  function def(name, role, write, fn) { A[name] = { role: role, write: write, run: fn }; }
+
+  // ── 공개 ──
+  def('publicInfo', 'public', false, function (db) {
+    var c = db.cfg(), o = {};
+    PUBLIC_CONFIG_KEYS.forEach(function (k) { o[k] = c[k]; });
+    return o;
+  });
+
+  // 참가자 공개 시간표 (이름 없이 조·시간·인원만). 일정 공개 스위치가 켜진 라운드만
+  def('publicSchedule', 'public', false, function (db) {
+    var cfg = db.cfg(), cnt = {};
+    db.t('Entries').forEach(function (e) { cnt[e.sessionId] = (cnt[e.sessionId] || 0) + 1; });
+    var pub = { R1: cfg.publishR1Schedule === 'Y', R2: cfg.publishR2Schedule === 'Y' };
+    return {
+      title: cfg.title, organizer: cfg.organizer, contact: cfg.contact, themeColor: cfg.themeColor, r1Name: cfg.r1Name, r2Name: cfg.r2Name, drawLeadMin: cfg.drawLeadMin, pubCountR1: cfg.pubCountR1, pubCountR2: cfg.pubCountR2,
+      sessions: db.t('Sessions').filter(function (x) { return pub[x.round]; }).map(function (x) {
+        return { round: x.round, groupKey: x.groupKey, no: x.no, label: x.label, date: x.date, drawTime: x.drawTime, startTime: x.startTime, endTime: x.endTime, venue: x.venue, count: cnt[x.sessionId] || 0 };
+      }),
+      plan: db.t('Plan').filter(function (x) { return pub[x.round]; }).map(function (x) { return { round: x.round, date: x.date }; })
+    };
+  });
+
+  def('lookup', 'public', false, function (db, p) {
+    return findSelf(db, p).map(function (q) { return participantView(db, q); });
+  });
+
+  // 참가자 본인 곡목 수정 (설정에서 허용한 라운드·부문·기간에만)
+  def('updateMyPieces', 'public', true, function (db, p) {
+    var q = findSelf(db, p).filter(function (x) { return x.id === s(p.pid); })[0];
+    if (!q) fail('본인 확인이 맞지 않습니다. 다시 조회해 주세요.');
+    var round = p.round === 'R2' ? 'R2' : 'R1';
+    var st = pieceEditState(db, q, round);
+    if (!st || !st.open) fail(st ? st.reason : '지금은 곡목을 수정할 수 없습니다.');
+    var before = piecesFor(q, round);
+    var incoming = (Array.isArray(p.pieces) ? p.pieces : []).slice(0, 6).map(function (x) {
+      return { round: round, kind: s(x.kind).slice(0, 30), country: s(x.country).slice(0, 30), composer: s(x.composer).slice(0, 80), title: s(x.title).slice(0, 200) };
+    });
+    if (!incoming.length) fail('곡목을 한 곡 이상 적어 주세요.');
+    if (incoming.some(function (x) { return !x.title; })) fail('곡명이 비어 있는 줄이 있어요.');
+    if (before.length && incoming.length !== before.length) fail('곡 수는 ' + before.length + '곡이어야 합니다. 곡을 늘리거나 줄이려면 사무국에 문의해 주세요.');
+    if (!st.reorder && before.length) incoming.forEach(function (x, i) { x.kind = before[i].kind; });
+    var others = parsePieces(q.pieces).filter(function (x) { return x.round !== round && x.round; });
+    var merged = round === 'R1' ? incoming.concat(others) : others.concat(incoming);
+    var now = db.store.now();
+    db.upsert('Participants', [{ id: q.id, pieces: normPieces(merged), piecesAt: now }]);
+    db.log(q.name, 'updateMyPieces', round + ' ' + piecesText(before) + ' → ' + piecesText(incoming));
+    db.invalidate();
+    return participantView(db, db.pmap()[q.id]);
+  });
+
+  def('login', 'public', false, function (db, p) {
+    var c = db.cfg(), role = s(p.role), secret = s(p.secret);
+    if (!secret) fail('비밀번호를 입력해 주세요.');
+    if (role === 'admin') {
+      if (!c.adminPassword) fail('관리자 비밀번호가 아직 설정되지 않았습니다. 구글시트 Config에서 adminPassword를 먼저 넣어 주세요.');
+      if (secret !== c.adminPassword) fail('비밀번호가 맞지 않습니다.');
+      return { token: issueToken(db, { role: 'admin' }), role: 'admin' };
+    }
+    if (role === 'desk') {
+      if (secret !== c.deskPin && secret !== c.adminPassword) fail('PIN이 맞지 않습니다.');
+      return { token: issueToken(db, { role: 'desk' }), role: 'desk' };
+    }
+    if (role === 'judge') {
+      var j = db.t('Judges').filter(function (x) { return s(x.pin) && s(x.pin) === secret; })[0];
+      if (!j) fail('PIN이 맞지 않습니다.');
+      return { token: issueToken(db, { role: 'judge', judgeId: j.judgeId }), role: 'judge', name: j.name };
+    }
+    fail('알 수 없는 로그인 유형');
+  });
+
+  // ── 관리자 ──
+  def('adminLoad', 'admin', false, function (db) {
+    var keys = allGroupKeys(db);
+    var results = { R1: {}, R2: {} };
+    ['R1', 'R2'].forEach(function (r) {
+      keys.forEach(function (k) { if (entriesOf(db, r, k).length) results[r][k] = computeGroup(db, r, k); });
+    });
+    return {
+      cfg: db.cfg(), groupKeys: keys, groups: db.t('Groups'), participants: db.t('Participants'),
+      sessions: db.t('Sessions'), entries: db.t('Entries'), judges: db.t('Judges'),
+      submissions: db.t('Submissions'), results: results, plan: db.t('Plan'),
+      staff: db.t('Staff'), work: db.t('Work'), prizes: db.t('Prizes'), requests: db.t('Requests'), docs: db.t('Docs'), judgePeople: judgeSummary(db)
+    };
+  });
+
+  def('setConfig', 'admin', true, function (db, p) {
+    var rows = [];
+    Object.keys(p.values || {}).forEach(function (k) { rows.push({ key: k, value: s(p.values[k]) }); });
+    db.upsert('Config', rows);
+    db.log('admin', 'setConfig', Object.keys(p.values || {}).join(','));
+    return true;
+  });
+
+  def('importParticipants', 'admin', true, function (db, p) {
+    var cfg = db.cfg(), rows = p.rows || [], mode = p.mode || 'merge';
+    var existing = db.pmap(), out = [], seen = {}, added = 0, updated = 0, keptPaid = 0;
+    rows.forEach(function (r, i) {
+      var id = s(r.id) || ('X' + (i + 1));
+      if (seen[id]) id = id + '-' + i;
+      seen[id] = true;
+      var old = existing[id] || {};
+      var o = {
+        id: id, name: s(r.name), birth: normBirth(r.birth), gender: s(r.gender), phone: normPhone(r.phone),
+        guardianName: s(r.guardianName), guardianPhone: normPhone(r.guardianPhone), email: s(r.email),
+        zip: s(r.zip) || s(old.zip), address: s(r.address) || s(old.address),
+        school: s(r.school), grade: s(r.grade), division: splitDivision(r.division).division, category: s(r.category),
+        appliedAt: s(r.appliedAt), payStatus: s(r.payStatus), teacher: s(r.teacher), pieces: normPieces(r.pieces) || s(old.pieces),
+        status: /취소|환불/.test(s(r.status)) ? '취소' : (old.status || '정상'), note: s(r.note) || s(old.note)
+      };
+      if (isPaid(old) && !isPaid(o)) { o.payStatus = old.payStatus; keptPaid++; }
+      o.payMemo = s(old.payMemo);
+      o.region = regionOf(o.address, o.zip);
+      o.token = s(old.token) || randToken();
+      o.groupKey = makeGroupKey(cfg, r.division, o.category, o.gender || splitDivision(r.division).gender);
+      if (existing[id]) updated++; else added++;
+      out.push(o);
+    });
+    if (mode === 'replace') db.replaceWhere('Participants', function () { return true; }, out);
+    else db.upsert('Participants', out);
+    // 부문 목록 자동 생성
+    var gexist = {}; db.t('Groups').forEach(function (g) { gexist[g.groupKey] = 1; });
+    var newG = [], seenG = {};
+    db.t('Participants').forEach(function (q) {
+      if (gexist[q.groupKey] || seenG[q.groupKey]) return;
+      seenG[q.groupKey] = 1;
+      var pr = q.groupKey.split('|');
+      newG.push({ groupKey: q.groupKey, division: pr[0], category: pr[1], sort: '', r1Cutline: '', awardCount: '3' });
+    });
+    if (newG.length) db.upsert('Groups', newG);
+    db.log('admin', 'importParticipants', { mode: mode, added: added, updated: updated });
+    return { added: added, updated: updated, keptPaid: keptPaid, groupsAdded: newG.length };
+  });
+
+  def('saveParticipant', 'admin', true, function (db, p) {
+    var cfg = db.cfg(), r = p.row || {};
+    if (!s(r.id)) fail('접수번호가 없습니다.');
+    var old = db.pmap()[r.id] || {};
+    var o = {}; SCHEMA.Participants.forEach(function (k) { if (k in r) o[k] = s(r[k]); });
+    if ('birth' in o) o.birth = normBirth(o.birth);
+    if ('phone' in o) o.phone = normPhone(o.phone);
+    if ('guardianPhone' in o) o.guardianPhone = normPhone(o.guardianPhone);
+    if ('pieces' in r) o.pieces = normPieces(r.pieces);
+    if ('address' in r || 'zip' in r) o.region = regionOf('address' in r ? r.address : old.address, 'zip' in r ? r.zip : old.zip);
+    if ('division' in o) { var sd = splitDivision(o.division); o.division = sd.division; if (sd.gender && !s(r.gender)) o.gender = sd.gender; }
+    o.token = s(old.token) || randToken();
+    var m = {}; Object.keys(old).forEach(function (k) { m[k] = old[k]; }); Object.keys(o).forEach(function (k) { m[k] = o[k]; });
+    o.groupKey = makeGroupKey(cfg, m.division, m.category, m.gender);
+    o.id = s(r.id);
+    db.upsert('Participants', [o]);
+    db.log('admin', 'saveParticipant', o.id);
+    return o;
+  });
+
+  def('setPayments', 'admin', true, function (db, p) {
+    var rows = (p.updates || []).map(function (u) { return { id: s(u.id), payStatus: s(u.payStatus), payMemo: s(u.payMemo) }; });
+    db.upsert('Participants', rows);
+    db.log('admin', 'setPayments', rows.length + '건');
+    return rows.length;
+  });
+
+  def('saveGroups', 'admin', true, function (db, p) { db.upsert('Groups', p.groups || []); return true; });
+
+  def('generateSessions', 'admin', true, function (db, p) {
+    var cfg = db.cfg(), round = p.round === 'R2' ? 'R2' : 'R1', gk = s(p.groupKey);
+    if (!gk) fail('부문을 선택해 주세요.');
+    var pm = db.pmap();
+    var oldEntries = db.t('Entries').filter(function (e) { return e.round === round && pm[e.pid] && pm[e.pid].groupKey === gk; });
+    var oldIds = {}; oldEntries.forEach(function (e) { oldIds[e.pid] = 1; });
+    var hasScores = db.t('Scores').some(function (x) { return x.round === round && oldIds[x.pid]; });
+    if (hasScores && !p.force) fail('이미 채점이 시작된 부문입니다. 조편성을 다시 하면 채점 연결이 끊길 수 있어요.');
+    var cand;
+    if (round === 'R1') {
+      cand = db.t('Participants').filter(function (q) { return q.groupKey === gk && isActive(q) && (isPaid(q) || p.includeUnpaid); });
+    } else {
+      var passIds = {};
+      db.t('Entries').forEach(function (e) { if (e.round === 'R1' && e.pass === 'Y') passIds[e.pid] = 1; });
+      cand = db.t('Participants').filter(function (q) { return q.groupKey === gk && passIds[q.id] && isActive(q); });
+    }
+    if (!cand.length) fail(round === 'R1' ? '편성할 참가자가 없습니다. (입금확인된 참가자만 편성됩니다)' : '본선진출자가 없습니다. 예선 커트라인을 먼저 확정해 주세요.');
+    var order = p.order || 'name';
+    if (order === 'random') cand.sort(function () { return Math.random() - 0.5; });
+    else if (order === 'applied') cand.sort(function (a, b) { return cmpKo(a.appliedAt, b.appliedAt); });
+    else cand.sort(function (a, b) { return cmpKo(a.name, b.name) || cmpKo(a.birth, b.birth); });
+
+    var slots = (p.slots || []).filter(function (x) { return s(x.date) && s(x.startTime); })
+      .sort(function (a, b) { return cmpKo(normDate(a.date) + normTime(a.startTime), normDate(b.date) + normTime(b.startTime)); });
+    if (!slots.length) fail('경연 일자와 시작 시각을 한 줄 이상 넣어 주세요.');
+    var n = cand.length, fixed = 0, free = 0;
+    slots.forEach(function (x) { if (+x.count > 0) fixed += +x.count; else free++; });
+    if (fixed > n) fail('지정한 인원 합(' + fixed + '명)이 편성 대상(' + n + '명)보다 많습니다.');
+    if (!free && fixed < n) fail('지정한 인원 합(' + fixed + '명)이 편성 대상(' + n + '명)보다 적습니다. 인원 칸을 비워 두면 나머지를 자동으로 나눕니다.');
+    var rest = n - fixed, base = free ? Math.floor(rest / free) : 0, extra = free ? rest % free : 0, fi = 0;
+    var counts = slots.map(function (x) { if (+x.count > 0) return +x.count; var c = base + (fi < extra ? 1 : 0); fi++; return c; });
+
+    var perSec = +p.perSec || +cfg.perSec || 200, lead = +cfg.drawLeadMin || 30;
+    var stamp = db.store.uid().slice(0, 6), pm0 = toMin(cfg.afternoonFrom) || 720;
+    var info = slots.map(function (x, i) { return { i: i, date: normDate(x.date), st: toMin(normTime(x.startTime)), cap: counts[i], members: [], per: +x.perSec || perSec, endTime: normTime(x.endTime) }; });
+    // '그날 마지막 조' = 이 부문의 새 조와 이미 편성된 다른 부문 조를 모두 놓고 봤을 때 그날 가장 늦게 시작하는 조
+    var otherSes = db.t('Sessions').filter(function (x) { return !(x.round === round && x.groupKey === gk); })
+      .concat((p.extraStarts || []).map(function (x) { return { date: normDate(x.date), startTime: normTime(x.startTime) }; })); // 계획 전체(아직 편성 전인 다른 부문 조 포함)
+    info.forEach(function (a) {
+      a.pm = a.st >= pm0;
+      a.lastOfDay = !info.some(function (b) { return b.date === a.date && b.st > a.st; }) &&
+        !otherSes.some(function (x) { return x.date === a.date && toMin(x.startTime) > a.st; });
+    });
+    // ① 지방 참가자(충청 이남 등): 오후 조(그날 마지막 조 제외) → 없으면 마지막 오후 조 → 그래도 없으면 늦은 오전 조
+    var farOn = p.farAfternoon !== false && info.length > 1;
+    var far = farOn ? cand.filter(function (q) { return isFar(cfg, q); }) : [];
+    var farIds = {}; far.forEach(function (q) { farIds[q.id] = 1; });
+    var tiers = [
+      info.filter(function (a) { return a.pm && !a.lastOfDay; }),
+      info.filter(function (a) { return a.pm && a.lastOfDay; }),
+      info.filter(function (a) { return !a.pm; }).sort(function (a, b) { return b.st - a.st; })
+    ];
+    var farStat = { total: far.length, preferred: 0, lastSlot: 0, morning: 0 };
+    far.forEach(function (q) {
+      for (var t2 = 0; t2 < tiers.length; t2++) {
+        var open = tiers[t2].filter(function (a) { return a.members.length < a.cap; });
+        if (!open.length) continue;
+        open.sort(function (a, b) { return a.members.length / a.cap - b.members.length / b.cap || a.st - b.st; }); // 고르게
+        open[0].members.push(q);
+        farStat[['preferred', 'lastSlot', 'morning'][t2]]++;
+        return;
+      }
+    });
+    // ② 나머지는 순서대로 남은 자리에
+    var rest2 = cand.filter(function (q) { return !farIds[q.id]; }), ri = 0;
+    info.slice().sort(function (a, b) { return cmpKo(a.date, b.date) || a.st - b.st; }).forEach(function (a) {
+      while (a.members.length < a.cap && ri < rest2.length) a.members.push(rest2[ri++]);
+    });
+    var sessions = [], entries = [], idx = 0;
+    info.forEach(function (a) {
+      var x = slots[a.i], i = a.i, sid = round + '-' + stamp + '-' + (i + 1);
+      var dur = durMin(cfg, a.cap, a.per);
+      sessions.push({
+        sessionId: sid, round: round, groupKey: gk, no: String(i + 1), label: (i + 1) + '조',
+        date: a.date, drawTime: fromMin(a.st - lead), startTime: fromMin(a.st), endTime: a.endTime || fromMin(a.st + dur),
+        venue: s(x.venue) || s(p.venue) || cfg.venue, perSec: String(a.per), locked: ''
+      });
+      // 조 안에서는 원래 순서(이름순 등)를 유지
+      var orderIx = {}; cand.forEach(function (q, k) { orderIx[q.id] = k; });
+      a.members.sort(function (m1, m2) { return orderIx[m1.id] - orderIx[m2.id]; }).forEach(function (q) {
+        idx++;
+        entries.push({ entryId: round + '|' + q.id, round: round, pid: q.id, sessionId: sid, seq: String(idx), drawNo: '', attend: '', checkinAt: '', pass: '', note: '' });
+      });
+    });
+    var oldSes = sessionsOf(db, round, gk).map(function (x) { return x.sessionId; });
+    db.replaceWhere('Sessions', function (x) { return oldSes.indexOf(x.sessionId) >= 0; }, sessions);
+    db.replaceWhere('Entries', function (e) { return e.round === round && oldIds[e.pid]; }, entries);
+    db.log('admin', 'generateSessions', { round: round, group: gk, sessions: sessions.length, people: n, far: farStat });
+    return { sessions: sessions.length, people: n, far: farStat };
+  });
+
+  function eligibleOf(db, round, gk) {
+    if (round === 'R1') return db.t('Participants').filter(function (q) { return q.groupKey === gk && isActive(q) && isPaid(q); });
+    var pass = {}; db.t('Entries').forEach(function (e) { if (e.round === 'R1' && e.pass === 'Y') pass[e.pid] = 1; });
+    return db.t('Participants').filter(function (q) { return q.groupKey === gk && pass[q.id] && isActive(q); });
+  }
+
+  def('savePlan', 'admin', true, function (db, p) {
+    var round = p.round === 'R2' ? 'R2' : 'R1';
+    var rows = (p.days || []).map(function (d, i) {
+      return { dayId: s(d.dayId) || (round + '-' + db.store.uid().slice(0, 8)), round: round, date: normDate(d.date), start: normTime(d.start), amEnd: normTime(d.amEnd), pmStart: normTime(d.pmStart),
+        lunchMin: s(d.lunchMin), gap: s(d.gap), venue: s(d.venue), piano: s(d.piano), note: s(d.note), blocks: JSON.stringify(parseBlocks(d.blocks)) };
+    });
+    db.replaceWhere('Plan', function (x) { return x.round === round; }, rows);
+    db.log('admin', 'savePlan', round + ' ' + rows.length + '일');
+    return rows.length;
+  });
+
+  // 계획대로 조편성: 부문마다 계획의 조(날짜·시각·인원·1인 시간)를 그대로 써서 편성. 인원이 안 맞는 부문은 건너뜀
+  def('applyPlan', 'admin', true, function (db, p) {
+    var cfg = db.cfg(), round = p.round === 'R2' ? 'R2' : 'R1';
+    var days = db.t('Plan').filter(function (x) { return x.round === round; });
+    var pa = planAll(cfg, days), byG = {};
+    pa.days.forEach(function (r) {
+      r.items.forEach(function (x) { if (x.type === 'session') (byG[x.groupKey] = byG[x.groupKey] || []).push({ date: r.day.date, startTime: x.start, endTime: x.end, count: x.n, perSec: x.perSec, venue: r.day.venue }); });
+    });
+    var only = p.groupKeys && p.groupKeys.length ? p.groupKeys : null, out = [];
+    Object.keys(byG).forEach(function (gk) {
+      if (only && only.indexOf(gk) < 0) return;
+      var need = eligibleOf(db, round, gk).length, planned = pa.totals[gk];
+      if (need !== planned) { out.push({ groupKey: gk, ok: false, msg: '대상 ' + need + '명인데 계획은 ' + planned + '명' }); return; }
+      try {
+        var extra = []; Object.keys(byG).forEach(function (g2) { if (g2 !== gk) byG[g2].forEach(function (x) { extra.push({ date: x.date, startTime: x.startTime }); }); });
+        var r = A.generateSessions.run(db, { round: round, groupKey: gk, slots: byG[gk], farAfternoon: p.farAfternoon !== false, force: !!p.force, order: p.order, extraStarts: extra });
+        out.push({ groupKey: gk, ok: true, sessions: r.sessions, people: r.people, far: r.far });
+      } catch (e) { out.push({ groupKey: gk, ok: false, msg: e.message }); }
+      db.invalidate();
+    });
+    db.log('admin', 'applyPlan', round + ' ' + out.filter(function (x) { return x.ok; }).length + '개 부문');
+    return out;
+  });
+
+  def('saveSessions', 'admin', true, function (db, p) {
+    var rows = (p.sessions || []).map(function (x) {
+      var o = { sessionId: s(x.sessionId) };
+      ['label', 'venue', 'locked', 'perSec'].forEach(function (k) { if (k in x) o[k] = s(x[k]); });
+      if ('date' in x) o.date = normDate(x.date);
+      if ('startTime' in x) o.startTime = normTime(x.startTime);
+      return o;
+    });
+    db.upsert('Sessions', rows);
+    recalcSessionEnd(db, db.cfg(), rows.map(function (r) { return r.sessionId; }));
+    return true;
+  });
+
+  def('moveEntry', 'admin', true, function (db, p) {
+    var e = db.t('Entries').filter(function (x) { return x.entryId === p.entryId; })[0];
+    var to = db.t('Sessions').filter(function (x) { return x.sessionId === p.sessionId; })[0];
+    if (!e || !to) fail('대상을 찾을 수 없습니다.');
+    if (to.round !== e.round) fail('같은 라운드 안에서만 옮길 수 있습니다.');
+    var from = e.sessionId;
+    db.upsert('Entries', [{ entryId: e.entryId, sessionId: to.sessionId, drawNo: '' }]);
+    recalcSessionEnd(db, db.cfg(), [from, to.sessionId]);
+    db.log('admin', 'moveEntry', e.entryId + ' → ' + to.sessionId);
+    return true;
+  });
+
+  def('saveJudges', 'admin', true, function (db, p) {
+    var rows = (p.judges || []).map(function (j) {
+      var o = { judgeId: s(j.judgeId) || ('J' + db.store.uid().slice(0, 8)), name: s(j.name), affiliation: s(j.affiliation), pin: s(j.pin), round: s(j.round) || 'R1', groups: s(j.groups), seat: s(j.seat) };
+      if ('staffId' in j) o.staffId = s(j.staffId);
+      if ('dates' in j) o.dates = splitList(j.dates).map(normDate).filter(Boolean).join(',');
+      return o;
+    });
+    var pins = {};
+    db.t('Judges').concat(rows).forEach(function (j) { if (j.pin) pins[j.pin] = (pins[j.pin] || {}); if (j.pin) pins[j.pin][j.judgeId] = 1; });
+    Object.keys(pins).forEach(function (k) { if (Object.keys(pins[k]).length > 1) fail('PIN ' + k + '가 두 명 이상에게 겹칩니다. 심사위원마다 다른 PIN을 써 주세요.'); });
+    if (p.removeIds && p.removeIds.length) db.replaceWhere('Judges', function (j) { return p.removeIds.indexOf(j.judgeId) >= 0; }, []);
+    db.upsert('Judges', rows);
+    db.log('admin', 'saveJudges', rows.length + '명');
+    return true;
+  });
+
+  def('setCutline', 'admin', true, function (db, p) {
+    var gk = s(p.groupKey), cut = s(p.cutline);
+    var g = computeGroup(db, 'R1', gk);
+    var upd = g.rows.map(function (r) {
+      var ok = !r.absent && r.scored > 0 && cut !== '' && (g.mode === 'rank' ? r.score <= +cut : r.score >= +cut);
+      return { entryId: r.entryId, pass: cut === '' ? '' : (ok ? 'Y' : 'N') };
+    });
+    db.upsert('Entries', upd);
+    db.upsert('Groups', [{ groupKey: gk, r1Cutline: cut }]);
+    db.log('admin', 'setCutline', gk + ' ≥ ' + cut);
+    return upd.filter(function (u) { return u.pass === 'Y'; }).length;
+  });
+
+  def('setPass', 'admin', true, function (db, p) {
+    db.upsert('Entries', [{ entryId: s(p.entryId), pass: s(p.pass) }]);
+    db.log('admin', 'setPass', p.entryId + '=' + p.pass);
+    return true;
+  });
+
+  def('setAward', 'admin', true, function (db, p) {
+    db.upsert('Entries', [{ entryId: s(p.entryId), award: s(p.award) }]);
+    db.log('admin', 'setAward', p.entryId + '=' + p.award);
+    return true;
+  });
+
+  def('unlockSubmission', 'admin', true, function (db, p) {
+    db.replaceWhere('Submissions', function (x) { return x.sessionId === p.sessionId && x.judgeId === p.judgeId; }, []);
+    db.log('admin', 'unlockSubmission', p.sessionId + '/' + p.judgeId);
+    return true;
+  });
+
+  def('adminScore', 'admin', true, function (db, p) {
+    // 종이 채점표로 받은 점수를 관리자가 대신 입력할 때
+    var e = db.t('Entries').filter(function (x) { return x.round === p.round && x.pid === p.pid; })[0];
+    if (!e) fail('대상을 찾을 수 없습니다.');
+    var v = s(p.value);
+    db.upsert('Scores', [{ scoreId: p.round + '|' + p.pid + '|' + p.judgeId, round: p.round, pid: p.pid, sessionId: e.sessionId, judgeId: p.judgeId, value: v, comment: s(p.comment), updatedAt: db.store.now() + ' (관리자)' }]);
+    return true;
+  });
+
+  // ── 현장(진행요원) ──
+  def('deskHome', 'desk', false, function (db) {
+    var cnt = {}, att = {}, drw = {};
+    db.t('Entries').forEach(function (e) {
+      cnt[e.sessionId] = (cnt[e.sessionId] || 0) + 1;
+      if (e.attend === 'Y') att[e.sessionId] = (att[e.sessionId] || 0) + 1;
+      if (s(e.drawNo)) drw[e.sessionId] = (drw[e.sessionId] || 0) + 1;
+    });
+    var cfg = db.cfg();
+    return {
+      title: cfg.title,
+      sessions: db.t('Sessions').map(function (x) {
+        return { sessionId: x.sessionId, round: x.round, roundName: roundCfg(cfg, x.round).name, groupKey: x.groupKey, groupLabel: groupLabel(x.groupKey), label: x.label, date: x.date, drawTime: x.drawTime, startTime: x.startTime, endTime: x.endTime, venue: x.venue, count: cnt[x.sessionId] || 0, attended: att[x.sessionId] || 0, drawn: drw[x.sessionId] || 0 };
+      }).sort(function (a, b) { return cmpKo(a.date + a.startTime, b.date + b.startTime); })
+    };
+  });
+
+  def('deskSession', 'desk', false, function (db, p) {
+    var x = db.t('Sessions').filter(function (q) { return q.sessionId === p.sessionId; })[0];
+    if (!x) fail('조 정보를 찾을 수 없습니다.');
+    var pm = db.pmap(), po = perfOrders(db, x.round, x.groupKey), cfg = db.cfg();
+    var list = db.t('Entries').filter(function (e) { return e.sessionId === x.sessionId; }).map(function (e) {
+      var q = pm[e.pid] || {};
+      return { entryId: e.entryId, pid: e.pid, name: q.name, birth: q.birth, school: q.school, grade: q.grade, phone4: digits(q.phone).slice(-4), guardian: q.guardianName, seq: +e.seq, drawNo: s(e.drawNo), perfOrder: po[e.entryId], attend: s(e.attend), checkinAt: s(e.checkinAt), pieces: piecesFor(q, x.round) };
+    }).sort(function (a, b) { return a.seq - b.seq; });
+    return { session: sessionView(x), round: x.round, roundName: roundCfg(cfg, x.round).name, groupKey: x.groupKey, groupLabel: groupLabel(x.groupKey), title: cfg.title, list: list, current: s(x.current) };
+  });
+
+  def('checkin', 'desk', true, function (db, p) {
+    var code = s(p.code).replace(/^KC:/i, '').toUpperCase();
+    var pm = db.pmap(), q = null;
+    if (code) q = db.t('Participants').filter(function (x) { return s(x.token).toUpperCase() === code || s(x.id).toUpperCase() === code; })[0];
+    if (!q && p.pid) q = pm[p.pid];
+    if (!q) fail('접수증 정보를 찾을 수 없습니다. 이름으로 검색해 보세요.');
+    var round = s(p.round) || 'R1';
+    var e = db.t('Entries').filter(function (x) { return x.round === round && x.pid === q.id; })[0];
+    if (!e) fail(q.name + ' 참가자는 이 라운드 편성 명단에 없습니다.');
+    var warn = '';
+    if (p.sessionId && e.sessionId !== p.sessionId) {
+      var real = db.t('Sessions').filter(function (x) { return x.sessionId === e.sessionId; })[0];
+      warn = '다른 조 참가자입니다: ' + (real ? (real.date + ' ' + real.startTime + ' ' + groupLabel(real.groupKey) + ' ' + real.label) : '');
+      if (!p.force) return { warn: warn, participant: { pid: q.id, name: q.name, school: q.school, birth: q.birth }, entryId: e.entryId, checkedIn: false };
+    }
+    var upd = { entryId: e.entryId, attend: 'Y', checkinAt: db.store.now() };
+    if (p.drawNo != null && s(p.drawNo) !== '') {
+      var dn = String(+p.drawNo);
+      var dup = db.t('Entries').filter(function (x) { return x.sessionId === e.sessionId && x.entryId !== e.entryId && s(x.drawNo) === dn; })[0];
+      if (dup) fail('추첨번호 ' + dn + '번은 이미 ' + (pm[dup.pid] || {}).name + ' 참가자에게 들어가 있습니다.');
+      upd.drawNo = dn;
+    }
+    db.upsert('Entries', [upd]);
+    return { checkedIn: true, warn: warn, entryId: e.entryId, participant: { pid: q.id, name: q.name, school: q.school, grade: q.grade, birth: q.birth }, drawNo: upd.drawNo || s(e.drawNo) };
+  });
+
+  def('setEntry', 'desk', true, function (db, p) {
+    var e = db.t('Entries').filter(function (x) { return x.entryId === p.entryId; })[0];
+    if (!e) fail('대상을 찾을 수 없습니다.');
+    var upd = { entryId: e.entryId };
+    if ('attend' in p) { upd.attend = s(p.attend); if (upd.attend === 'Y' && !s(e.checkinAt)) upd.checkinAt = db.store.now(); }
+    if ('drawNo' in p) {
+      var dn = s(p.drawNo) === '' ? '' : String(+p.drawNo);
+      if (dn && !(+dn > 0)) fail('추첨번호는 1 이상의 숫자로 넣어 주세요.');
+      if (dn) {
+        var pm = db.pmap();
+        var dup = db.t('Entries').filter(function (x) { return x.sessionId === e.sessionId && x.entryId !== e.entryId && s(x.drawNo) === dn; })[0];
+        if (dup) fail('추첨번호 ' + dn + '번은 이미 ' + (pm[dup.pid] || {}).name + ' 참가자에게 들어가 있습니다.');
+      }
+      upd.drawNo = dn;
+    }
+    db.upsert('Entries', [upd]);
+    return true;
+  });
+
+  def('autoDraw', 'desk', true, function (db, p) {
+    var list = db.t('Entries').filter(function (x) { return x.sessionId === p.sessionId; });
+    var used = {}; list.forEach(function (e) { if (s(e.drawNo)) used[+e.drawNo] = 1; });
+    var free = []; for (var i = 1; i <= list.length; i++) if (!used[i]) free.push(i);
+    for (var k = free.length - 1; k > 0; k--) { var j = Math.floor(Math.random() * (k + 1)); var t = free[k]; free[k] = free[j]; free[j] = t; }
+    var upd = [];
+    list.filter(function (e) { return !s(e.drawNo); }).forEach(function (e, idx) { upd.push({ entryId: e.entryId, drawNo: String(free[idx]) }); });
+    db.upsert('Entries', upd);
+    db.log('desk', 'autoDraw', p.sessionId + ' ' + upd.length + '명');
+    return upd.length;
+  });
+
+  // 무대 진행: 지금 연주 중인 연주자 표시 → 순서판·심사위원 화면에 함께 보임
+  def('setCurrent', 'desk', true, function (db, p) {
+    var x = db.t('Sessions').filter(function (q) { return q.sessionId === p.sessionId; })[0];
+    if (!x) fail('조 정보를 찾을 수 없습니다.');
+    var eid = s(p.entryId);
+    if (eid && !db.t('Entries').some(function (e) { return e.entryId === eid && e.sessionId === x.sessionId; })) fail('이 조의 연주자가 아닙니다.');
+    db.upsert('Sessions', [{ sessionId: x.sessionId, current: eid }]);
+    return true;
+  });
+
+  // ── 심사위원 ──
+  def('judgeHome', 'judge', false, function (db, p, auth) {
+    var j = judgeOf(db, auth), cfg = db.cfg(), rc = roundCfg(cfg, j.round);
+    var subs = {}; db.t('Submissions').forEach(function (x) { if (x.judgeId === j.judgeId) subs[x.sessionId] = x.submittedAt; });
+    var mine = {}; db.t('Scores').forEach(function (x) { if (x.judgeId === j.judgeId && s(x.value) !== '') mine[x.sessionId] = (mine[x.sessionId] || 0) + 1; });
+    var cnt = {}, abs = {}; db.t('Entries').forEach(function (e) { cnt[e.sessionId] = (cnt[e.sessionId] || 0) + 1; if (e.attend === 'N') abs[e.sessionId] = (abs[e.sessionId] || 0) + 1; });
+    var ses = db.t('Sessions').filter(function (x) { return judgeCanSee(db, j, x); }).map(function (x) {
+      return { sessionId: x.sessionId, groupLabel: groupLabel(x.groupKey), label: x.label, date: x.date, startTime: x.startTime, endTime: x.endTime, venue: x.venue, count: cnt[x.sessionId] || 0, absent: abs[x.sessionId] || 0, mine: mine[x.sessionId] || 0, submittedAt: subs[x.sessionId] || '', locked: x.locked === 'Y' };
+    }).sort(function (a, b) { return cmpKo(a.date + a.startTime, b.date + b.startTime); });
+    return { judge: { name: j.name, round: j.round, roundName: rc.name }, mode: rc.mode, max: rc.max, title: cfg.title, sessions: ses };
+  });
+
+  def('judgeSheet', 'judge', false, function (db, p, auth) {
+    var j = judgeOf(db, auth), cfg = db.cfg(), rc = roundCfg(cfg, j.round);
+    var x = db.t('Sessions').filter(function (q) { return q.sessionId === p.sessionId; })[0];
+    if (!x || !judgeCanSee(db, j, x)) fail('이 조의 채점 권한이 없습니다.');
+    var po = perfOrders(db, x.round, x.groupKey), pm = db.pmap();
+    var mine = {}; db.t('Scores').forEach(function (q) { if (q.judgeId === j.judgeId && q.round === x.round) mine[q.pid] = q; });
+    var showNames = cfg.showNamesToJudges === 'Y', showPieces = cfg.showPiecesToJudges !== 'N';
+    var list = db.t('Entries').filter(function (e) { return e.sessionId === x.sessionId; }).map(function (e) {
+      var q = pm[e.pid] || {}, m = mine[e.pid];
+      return { pid: e.pid, seq: +e.seq, perfOrder: po[e.entryId], drawNo: s(e.drawNo), absent: e.attend === 'N', value: m ? s(m.value) : '', comment: m ? s(m.comment) : '', name: showNames ? q.name : '', pieces: showPieces ? piecesFor(q, x.round) : [] };
+    }).sort(function (a, b) {
+      var pa = a.perfOrder == null ? 9999 + a.seq : a.perfOrder, pb = b.perfOrder == null ? 9999 + b.seq : b.perfOrder;
+      return pa - pb;
+    });
+    var sub = db.t('Submissions').filter(function (q) { return q.sessionId === x.sessionId && q.judgeId === j.judgeId; })[0];
+    var cur = db.t('Entries').filter(function (e) { return e.entryId === s(x.current); })[0];
+    return { session: sessionView(x), groupLabel: groupLabel(x.groupKey), roundName: rc.name, mode: rc.mode, max: rc.max, list: list, submittedAt: sub ? sub.submittedAt : '', locked: x.locked === 'Y', judgeName: j.name, currentPid: cur ? cur.pid : '' };
+  });
+
+  def('score', 'judge', true, function (db, p, auth) {
+    var j = judgeOf(db, auth), rc = roundCfg(db.cfg(), j.round);
+    var x = db.t('Sessions').filter(function (q) { return q.sessionId === p.sessionId; })[0];
+    if (!x || !judgeCanSee(db, j, x)) fail('이 조의 채점 권한이 없습니다.');
+    if (x.locked === 'Y') fail('이 조는 채점이 마감되었습니다.');
+    if (db.t('Submissions').some(function (q) { return q.sessionId === x.sessionId && q.judgeId === j.judgeId; })) fail('이미 제출한 채점표입니다. 수정이 필요하면 사무국에 요청해 주세요.');
+    var e = db.t('Entries').filter(function (q) { return q.sessionId === x.sessionId && q.pid === p.pid; })[0];
+    if (!e) fail('이 조의 참가자가 아닙니다.');
+    var v = s(p.value);
+    if (v !== '') {
+      var n = +v;
+      if (rc.mode === 'ox' && !(n === 0 || n === 1)) fail('O 또는 X만 입력할 수 있습니다.');
+      if (rc.mode === 'rank' && !(n >= 1 && n <= rc.max && Math.floor(n) === n)) fail('1~' + rc.max + ' 사이 등위만 입력할 수 있습니다.');
+      if (rc.mode === 'score' && !(n >= 0 && n <= rc.max)) fail('0~' + rc.max + ' 사이 점수만 입력할 수 있습니다.');
+    }
+    var row = { scoreId: x.round + '|' + p.pid + '|' + j.judgeId, round: x.round, pid: p.pid, sessionId: x.sessionId, judgeId: j.judgeId, value: v, updatedAt: db.store.now() };
+    if ('comment' in p) row.comment = s(p.comment);
+    db.upsert('Scores', [row]);
+    return { saved: true, at: row.updatedAt };
+  });
+
+  def('submitSheet', 'judge', true, function (db, p, auth) {
+    var j = judgeOf(db, auth);
+    var x = db.t('Sessions').filter(function (q) { return q.sessionId === p.sessionId; })[0];
+    if (!x || !judgeCanSee(db, j, x)) fail('이 조의 채점 권한이 없습니다.');
+    var ent = db.t('Entries').filter(function (e) { return e.sessionId === x.sessionId && e.attend !== 'N'; });
+    var mine = {}; db.t('Scores').forEach(function (q) { if (q.judgeId === j.judgeId && s(q.value) !== '') mine[q.pid] = 1; });
+    var missing = ent.filter(function (e) { return !mine[e.pid]; }).length;
+    if (missing) fail('아직 채점하지 않은 연주자가 ' + missing + '명 있습니다. (불참 처리된 연주자는 제외)');
+    db.upsert('Submissions', [{ subId: x.sessionId + '|' + j.judgeId, sessionId: x.sessionId, judgeId: j.judgeId, submittedAt: db.store.now() }]);
+    db.log(j.name, 'submitSheet', x.sessionId);
+    return true;
+  });
+
+  /* =====================================================================
+   * 인력(심사위원·진행요원) · 상금 · 공결공문 · 발급대장
+   * ===================================================================== */
+  function num(v) { var n = +String(v == null ? '' : v).replace(/[^\d.-]/g, ''); return isFinite(n) ? n : 0; }
+  function floor10(n) { return Math.floor(n / 10) * 10; }
+  function ceil10(n) { return Math.ceil(Math.round(n * 100) / 100 / 10) * 10; }
+
+  /* 원천징수 (기타소득) — 상금: 필요경비 80%(4.4%), 심사비(일시적 인적용역): 60%(8.8%)
+   * 기타소득금액(지급액-필요경비)이 과세최저한(5만원) 이하면 세금 없음. 소득세·지방소득세 10원 미만 버림 */
+  function withholding(amount, kind, cfg) {
+    cfg = cfg || DEFAULT_CONFIG;
+    amount = Math.round(num(amount));
+    var rate = num(kind === 'prize' ? cfg.taxPrizeExpense : cfg.taxJudgeExpense) / 100;
+    var expense = Math.round(amount * rate), income = amount - expense;
+    var tax = 0, local = 0;
+    if (income > num(cfg.taxMinIncome)) {
+      tax = floor10(income * num(cfg.taxRate) / 100);
+      local = floor10(tax * num(cfg.localTaxRate) / 100);
+    }
+    return { amount: amount, expense: expense, income: income, tax: tax, local: local, net: amount - tax - local };
+  }
+
+  /* 상금: Groups.prizes 또는 Config.prizeDefault '1위=1000000,2위=500000' */
+  function prizeTable(text) {
+    var o = {};
+    s(text).split(/[,\n]/).forEach(function (x) { var m = /(\d+)\s*위\s*[=:]\s*([\d,]+)/.exec(x); if (m) o[+m[1]] = num(m[2]); });
+    return o;
+  }
+  function prizeAmount(cfg, group, award) {
+    var m = /(\d+)\s*위/.exec(s(award));
+    if (!m) return 0;
+    var t = prizeTable(group && group.prizes);
+    if (!Object.keys(t).length) t = prizeTable(cfg.prizeDefault);
+    return t[+m[1]] || 0;
+  }
+
+  /* 근로시간 — 실제(start/end)가 있으면 실제, 없으면 예정. 휴게: 지정값 → 8시간 이상 기본값(60) → 4시간 이상 30분 */
+  function workMinutes(w, cfg, planned) {
+    var a = toMin(planned ? w.planStart : (s(w.start) || w.planStart)), b = toMin(planned ? w.planEnd : (s(w.end) || w.planEnd));
+    if (a == null || b == null || b <= a) return { span: 0, rest: 0, work: 0 };
+    var span = b - a, rest;
+    if (s(w.breakMin) !== '') rest = num(w.breakMin);
+    else rest = span >= 8 * 60 + 30 ? num((cfg || DEFAULT_CONFIG).defaultBreakMin || 60) : span >= 4 * 60 + 30 ? 30 : 0;
+    return { span: span, rest: rest, work: Math.max(0, span - rest) };
+  }
+  function weekKey(date) {
+    var m = /(\d{4})-(\d{2})-(\d{2})/.exec(date); if (!m) return date;
+    var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])), wd = (d.getUTCDay() + 6) % 7; // 월요일 시작
+    d.setUTCDate(d.getUTCDate() - wd);
+    return d.toISOString().slice(0, 10);
+  }
+  /* 인건비 — 74회 인사팀 확인 방식: 주 15시간 이상 일한 주는 주휴(그 주 근로시간×8/40, 10분 단위 올림)
+   * 주휴는 그 주 마지막 근무일이 속한 달에 붙이고, 금액은 10원 단위 올림 */
+  function staffPay(rows, cfg, wage) {
+    cfg = cfg || DEFAULT_CONFIG; wage = num(wage || cfg.hourlyWage);
+    var weeks = {}, months = {};
+    rows.filter(function (w) { return s(w.date); }).sort(function (a, b) { return cmpKo(a.date, b.date); }).forEach(function (w) {
+      var mins = workMinutes(w, cfg).work, mk = w.date.slice(0, 7), wk = weekKey(w.date);
+      if (!mins) return;
+      var M = months[mk] = months[mk] || { month: mk, days: 0, minutes: 0, holiday: 0 };
+      M.days++; M.minutes += mins;
+      var W = weeks[wk] = weeks[wk] || { minutes: 0, last: w.date };
+      W.minutes += mins; if (w.date > W.last) W.last = w.date;
+    });
+    Object.keys(weeks).forEach(function (k) {
+      var W = weeks[k];
+      if (W.minutes >= 15 * 60) {
+        var h = Math.ceil(W.minutes * 8 / 40 / 10 - 1e-9) * 10;
+        var M = months[W.last.slice(0, 7)]; if (M) M.holiday += h;
+      }
+    });
+    return Object.keys(months).sort().map(function (k) {
+      var M = months[k];
+      M.wage = wage;
+      M.pay = ceil10((M.minutes + M.holiday) / 60 * wage);
+      return M;
+    });
+  }
+
+  /* 신분증·통장 사본 글자(OCR) → 칸 채우기 후보. 확인은 본인이 화면에서 */
+  var BANKS = [[/카카오\s*뱅크|kakao\s*bank/i, '카카오뱅크'], [/토스\s*뱅크/i, '토스뱅크'], [/케이\s*뱅크|K\s*bank/i, '케이뱅크'], [/KB|국민은행|국민/, '국민'], [/신한/, '신한'], [/우리은행|우리/, '우리'],
+    [/하나/, '하나'], [/NH|농협/, '농협'], [/IBK|기업은행/, '기업'], [/SC\s*제일|제일은행/, 'SC제일'], [/씨티/, '씨티'], [/새마을/, '새마을금고'], [/신협/, '신협'], [/우체국/, '우체국'],
+    [/수협/, '수협'], [/iM\s*뱅크|대구은행/, 'iM뱅크'], [/부산은행/, '부산'], [/경남은행/, '경남'], [/광주은행/, '광주'], [/전북은행/, '전북'], [/제주은행/, '제주'], [/산업은행/, '산업']];
+  function parseIdText(t) {
+    t = s(t).replace(/\r/g, '');
+    var out = {}, m = /(\d{6})\s*[-–—~]\s*([1-8]\d{6})/.exec(t);
+    if (m) { out.rrn = m[1] + '-' + m[2]; out.birth = m[1]; }
+    var lines = t.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+    for (var i = 0; i < lines.length; i++) {
+      var ln = lines[i].replace(/\(.*?\)/g, '').trim();
+      if (/주민등록증|운전면허증|대한민국|REPUBLIC|여권|PASSPORT|Driver/i.test(ln)) continue;
+      var nm = ln.replace(/\s+/g, '');
+      if (/^[가-힣]{2,5}$/.test(nm) && !/특별시|광역시|도청|경찰청|구청장|시장|군수/.test(nm)) { out.name = nm; break; }
+    }
+    var ai = lines.findIndex ? lines.findIndex(function (x) { return /(시|도)\s+\S+(구|시|군)/.test(x) && !/청장|시장|군수/.test(x); }) : -1;
+    if (ai >= 0) {
+      var addr = [lines[ai]];
+      if (lines[ai + 1] && !/\d{4}\.\s*\d{1,2}\.|청장|시장|군수|구청장/.test(lines[ai + 1])) addr.push(lines[ai + 1]);
+      out.address = addr.join(' ').replace(/\s+/g, ' ');
+    }
+    return out;
+  }
+  function parseBankText(t) {
+    t = s(t).replace(/\r/g, '');
+    var out = {}, i;
+    for (i = 0; i < BANKS.length; i++) if (BANKS[i][0].test(t)) { out.bank = BANKS[i][1]; break; }
+    var lab = /(계좌\s*번호|계좌|Account\s*No\.?|고객번호)\s*[:：]?\s*([\d][\d\s-]{8,22}\d)/i.exec(t);
+    var cand = lab ? lab[2] : null;
+    if (!cand) {
+      var all = t.match(/\d[\d-]{8,20}\d/g) || [];
+      all = all.filter(function (x) { var d = digits(x); return d.length >= 10 && d.length <= 16 && !/^\d{6}-?[1-8]\d{6}$/.test(x) && !/^(19|20)\d{2}-?\d{2}-?\d{2}$/.test(x) && !/^0\d{1,2}-\d{3,4}-\d{4}$/.test(x); });
+      all.sort(function (a, b) { return (b.indexOf('-') >= 0) - (a.indexOf('-') >= 0) || digits(b).length - digits(a).length; });
+      cand = all[0];
+    }
+    if (cand) out.account = cand.replace(/\s+/g, '');
+    var hm = /(예금주|성\s*명|고객명|명\s*의)\s*[:：]?\s*([가-힣]{2,5})/.exec(t);
+    if (hm) out.holder = hm[2];
+    return out;
+  }
+
+  function staffByToken(db, p) {
+    var t = s(p.t);
+    if (t.length < 12) fail('링크가 올바르지 않습니다. 사무국에서 받은 주소를 그대로 열어 주세요.');
+    var st = db.t('Staff').filter(function (x) { return x.token === t; })[0];
+    if (!st || /삭제/.test(st.status)) fail('등록 정보를 찾을 수 없습니다. 사무국에 문의해 주세요.');
+    var ph = digits(st.phone).slice(-4);
+    if (ph && digits(p.phone4).slice(-4) !== ph) fail('휴대폰 뒷 4자리가 맞지 않습니다.');
+    return st;
+  }
+
+  /* 심사위원 한 사람이 맡은 라운드·부문·날짜 (Judges 여러 줄을 사람 기준으로 묶음) */
+  function judgeDatesOf(db, j) {
+    var ds = splitList(j.dates).map(normDate).filter(Boolean);
+    if (ds.length) return ds;
+    var seen = {};
+    db.t('Sessions').forEach(function (x) { if (x.round === j.round && judgeCovers(j, x.groupKey) && x.date) seen[x.date] = 1; });
+    return Object.keys(seen).sort();
+  }
+  function judgeSummary(db) {
+    var staff = db.t('Staff'), people = {}, order = [];
+    db.t('Judges').forEach(function (j) {
+      var st = j.staffId ? staff.filter(function (x) { return x.staffId === j.staffId; })[0] : staff.filter(function (x) { return x.kind === 'judge' && x.name === j.name && (!x.affiliation || !j.affiliation || x.affiliation === j.affiliation); })[0];
+      var key = st ? st.staffId : 'N:' + j.name + '|' + j.affiliation;
+      if (!people[key]) { people[key] = { key: key, staffId: st ? st.staffId : '', name: j.name, affiliation: j.affiliation || (st && st.affiliation) || '', judgeIds: [], rounds: {} }; order.push(key); }
+      var P = people[key];
+      P.judgeIds.push(j.judgeId);
+      var R = P.rounds[j.round] = P.rounds[j.round] || { dates: [], divisions: [] };
+      judgeDatesOf(db, j).forEach(function (d) { if (R.dates.indexOf(d) < 0) R.dates.push(d); });
+      var divs = s(j.groups) && s(j.groups) !== '전체' ? splitList(j.groups).map(function (g) { return g.split('|')[0]; })
+        : db.t('Sessions').filter(function (x) { return x.round === j.round && (R.dates.indexOf(x.date) >= 0); }).map(function (x) { return x.groupKey.split('|')[0]; });
+      divs.forEach(function (d) { if (d && R.divisions.indexOf(d) < 0) R.divisions.push(d); });
+      R.dates.sort();
+    });
+    return order.map(function (k) {
+      var P = people[k], days = {};
+      Object.keys(P.rounds).forEach(function (r) { P.rounds[r].dates.forEach(function (d) { days[d] = 1; }); });
+      P.days = Object.keys(days).sort();
+      return P;
+    });
+  }
+
+  function myRequests(db, pid) {
+    var docs = db.t('Docs');
+    return db.t('Requests').filter(function (r) { return r.pid === pid; }).map(function (r) {
+      var d = r.docId ? docs.filter(function (x) { return x.docId === r.docId && x.status !== '취소'; })[0] : null;
+      return { reqId: r.reqId, kind: r.kind, recipient: r.recipient, attn: r.attn, target: r.target, accompName: r.accompName, note: r.note,
+        status: r.status, reply: r.reply, createdAt: r.createdAt, docId: d ? d.docId : '', docNo: d ? d.docNo : '', ready: !!d };
+    });
+  }
+  function prizeView(db, p, award) {
+    var cfg = db.cfg(), g = db.t('Groups').filter(function (x) { return x.groupKey === p.groupKey; })[0];
+    var row = db.t('Prizes').filter(function (x) { return x.pid === p.id; })[0];
+    var amount = row && s(row.amount) ? num(row.amount) : prizeAmount(cfg, g, award);
+    return {
+      open: cfg.prizeOpen === 'Y', award: award, amount: amount, due: cfg.prizeDue, ceremony: cfg.awardCeremony,
+      submitted: row && row.submittedAt ? {
+        holderType: row.holderType, holder: row.holder, relation: row.relation, bank: row.bank, accountMask: row.accountMask, rrnMask: row.rrnMask,
+        attend: row.attend, attendCount: row.attendCount, mailAddress: row.mailAddress, submittedAt: row.submittedAt, status: row.status,
+        hasBank: !!row.bankFile, hasFamily: !!row.familyFile, idCheck: row.idCheck || ''
+      } : null,
+      files: row ? { bank: !!row.bankFile, family: !!row.familyFile, idCheck: row.idCheck || '' } : { bank: false, family: false, idCheck: '' }
+    };
+  }
+
+  function staffView(db, st) {
+    var cfg = db.cfg();
+    var o = {
+      staffId: st.staffId, kind: st.kind, name: st.name, affiliation: st.affiliation, title: st.title, phone: st.phone, email: st.email,
+      birth: st.birth, zip: st.zip, address: st.address, bank: st.bank, holder: st.holder, accountMask: st.accountMask, rrnMask: st.rrnMask,
+      hasId: !!st.idFile, idCheck: st.idCheck || '', hasBank: !!st.bankFile, hasSign: !!st.sign, agreeAt: st.agreeAt, pledgeAt: st.pledgeAt, contractAt: st.contractAt,
+      submittedAt: st.submittedAt, status: st.status,
+      cfg: { title: cfg.title, shortTitle: cfg.shortTitle, contact: cfg.contact, pubKey: cfg.pubKey, collectIdCopy: cfg.collectIdCopy, collectRrn: cfg.collectRrn, themeColor: cfg.themeColor }
+    };
+    if (st.kind === 'judge') {
+      var me = judgeSummary(db).filter(function (x) { return x.staffId === st.staffId; })[0];
+      o.judge = me ? { rounds: me.rounds, days: me.days, fee: num(cfg.judgeFee) } : null;
+    } else {
+      var wage = num(st.wage || cfg.hourlyWage);
+      o.work = db.t('Work').filter(function (w) { return w.staffId === st.staffId; }).sort(function (a, b) { return cmpKo(a.date, b.date); }).map(function (w) {
+        var m = workMinutes(w, cfg, true);
+        return { date: w.date, start: w.planStart, end: w.planEnd, rest: m.rest, minutes: m.work, role: w.role };
+      });
+      o.contract = { wage: wage, period: o.work.length ? [o.work[0].date, o.work[o.work.length - 1].date] : [], payDay: cfg.payDay, place: cfg.workPlace, duty: cfg.workDuty, dept: cfg.workDept };
+    }
+    o.docs = db.t('Docs').filter(function (d) { return d.refId === st.staffId && d.status !== '취소'; }).map(function (d) { return { docId: d.docId, kind: d.kind, title: d.title, createdAt: d.createdAt }; });
+    return o;
+  }
+
+  var STAFF_ADMIN_FIELDS = ['kind', 'name', 'affiliation', 'title', 'orgHead', 'phone', 'email', 'wage', 'status', 'note', 'nameEn', 'idCheck'];
+  def('saveStaff', 'admin', true, function (db, p) {
+    var have = {}; db.t('Staff').forEach(function (x) { have[x.staffId] = x; });
+    var rows = (p.staff || []).map(function (x) {
+      var o = { staffId: s(x.staffId) || ('S' + db.store.uid().slice(0, 10)) };
+      STAFF_ADMIN_FIELDS.forEach(function (k) { if (k in x) o[k] = s(x[k]); });
+      if (o.phone) o.phone = normPhone(o.phone) || o.phone;
+      if (!have[o.staffId]) { o.token = db.store.uid() + db.store.uid(); o.kind = o.kind === 'staff' ? 'staff' : (o.kind || 'judge'); o.status = o.status || '초대'; }
+      if (!o.name && !have[o.staffId]) fail('이름이 빈 줄이 있어요.');
+      o.updatedAt = db.store.now();
+      return o;
+    });
+    db.upsert('Staff', rows);
+    db.log('admin', 'saveStaff', rows.length + '명');
+    return rows.map(function (r) { return r.staffId; });
+  });
+  def('removeStaff', 'admin', true, function (db, p) {
+    var ids = (p.staffIds || []).map(s);
+    db.replaceWhere('Staff', function (x) { return ids.indexOf(x.staffId) >= 0; }, []);
+    db.replaceWhere('Work', function (x) { return ids.indexOf(x.staffId) >= 0; }, []);
+    db.log('admin', 'removeStaff', ids.join(','));
+    return true;
+  });
+  def('resetStaffLink', 'admin', true, function (db, p) {
+    var st = db.t('Staff').filter(function (x) { return x.staffId === s(p.staffId); })[0];
+    if (!st) fail('사람을 찾을 수 없어요.');
+    var t = db.store.uid() + db.store.uid();
+    db.upsert('Staff', [{ staffId: st.staffId, token: t }]);
+    return t;
+  });
+  def('saveWork', 'admin', true, function (db, p) {
+    var ids = (p.staffIds || []).map(s);
+    var rows = (p.rows || []).map(function (w) {
+      return { workId: s(w.workId) || ('W' + db.store.uid().slice(0, 10)), staffId: s(w.staffId), date: normDate(w.date), planStart: normTime(w.planStart), planEnd: normTime(w.planEnd),
+        start: normTime(w.start), end: normTime(w.end), breakMin: s(w.breakMin) === '' ? '' : String(num(w.breakMin)), role: s(w.role), note: s(w.note) };
+    }).filter(function (w) { return w.staffId && /^\d{4}-\d{2}-\d{2}$/.test(w.date); });
+    rows.forEach(function (w) { if (ids.indexOf(w.staffId) < 0) ids.push(w.staffId); });
+    db.replaceWhere('Work', function (x) { return ids.indexOf(x.staffId) >= 0; }, rows);
+    return rows.length;
+  });
+
+  // ── 심사위원·진행요원 본인 입력 (링크 + 휴대폰 뒷4자리)
+  def('staffSelf', 'public', false, function (db, p) { return staffView(db, staffByToken(db, p)); });
+  def('staffSubmit', 'public', true, function (db, p) {
+    var st = staffByToken(db, p), cfg = db.cfg(), info = p.info || {}, o = { staffId: st.staffId };
+    ['affiliation', 'title', 'email', 'zip', 'address', 'bank', 'holder', 'nameEn'].forEach(function (k) { if (k in info) o[k] = s(info[k]).slice(0, 200); });
+    if ('phone' in info && normPhone(info.phone)) o.phone = normPhone(info.phone);
+    if ('birth' in info) o.birth = digits(info.birth).slice(0, 8);
+    var enc = function (v) { v = s(v); if (v && !/^E1\.[A-Za-z0-9+/=._-]+$/.test(v)) fail('개인정보 암호화가 되지 않았습니다. 화면을 새로 고친 뒤 다시 시도해 주세요.'); return v; };
+    if ('rrnEnc' in p) { o.rrnEnc = enc(p.rrnEnc); o.rrnMask = s(p.rrnMask).replace(/[^\d*-]/g, '').slice(0, 14); }
+    if ('accountEnc' in p) { o.accountEnc = enc(p.accountEnc); o.accountMask = s(p.accountMask).replace(/[^\d*-]/g, '').slice(0, 24); }
+    var ag = p.agree || {}, now = db.store.now();
+    if (st.kind === 'judge') { if (ag.privacy) o.agreeAt = now; }
+    else { if (ag.privacy) o.agreeAt = now; if (ag.pledge) o.pledgeAt = now; if (ag.contract) o.contractAt = now; }
+    if (p.final) {
+      var need = [];
+      var m = {}; Object.keys(st).forEach(function (k) { m[k] = st[k]; }); Object.keys(o).forEach(function (k) { m[k] = o[k]; });
+      if (!m.address) need.push('주소');
+      if (!m.bank || !m.accountEnc) need.push('계좌');
+      if (cfg.collectRrn === 'Y' && !m.rrnEnc) need.push('주민등록번호');
+      if (cfg.collectIdCopy !== 'N' && !m.idFile) need.push('신분증 사본');
+      if (cfg.collectIdCopy !== 'N' && !ag.idRrn) need.push('주민번호가 보이는 신분증 확인');
+      if (!m.bankFile) need.push('통장 사본');
+      if (!m.agreeAt) need.push('개인정보 동의');
+      if (st.kind !== 'judge' && (!m.pledgeAt || !m.contractAt)) need.push('서약·계약 동의');
+      if (!m.sign) need.push('서명');
+      if (need.length) fail('아직 비어 있는 항목이 있어요: ' + need.join(', '));
+      o.submittedAt = now; o.status = '제출';
+    }
+    o.updatedAt = now;
+    db.upsert('Staff', [o]);
+    db.log(st.name, 'staffSubmit', p.final ? '제출' : '저장');
+    return staffView(db, db.t('Staff').filter(function (x) { return x.staffId === st.staffId; })[0] || st);
+  });
+  // 파일·서명 연결 — ref: 'drive:파일ID' (구글) / 'demo:파일명' / 'data:image/png;base64,…'(데모 서명)
+  def('staffAttach', 'public', true, function (db, p) {
+    var st = staffByToken(db, p), col = { id: 'idFile', bank: 'bankFile', sign: 'sign' }[s(p.kind)];
+    if (!col) fail('알 수 없는 파일 종류');
+    var ref = s(p.ref);
+    if (!/^(drive:[\w-]{10,}|demo:.{1,120}|data:image\/png;base64,[A-Za-z0-9+/=]{20,120000})$/.test(ref)) fail('파일 정보가 올바르지 않습니다.');
+    var o = { staffId: st.staffId, updatedAt: db.store.now() }; o[col] = ref;
+    if (col === 'idFile') o.idCheck = '';   // 새로 올리면 주민번호 확인을 다시 (서버 글자 인식 또는 관리자 확인)
+    db.upsert('Staff', [o]);
+    return { old: st[col] || '', staffId: st.staffId };
+  });
+
+  // ── 참가자: 공결공문 신청 · 상금 수령 정보
+  function selfOne(db, p) {
+    var q = findSelf(db, p).filter(function (x) { return x.id === s(p.pid); })[0];
+    if (!q) fail('본인 확인이 맞지 않습니다. 다시 조회해 주세요.');
+    return q;
+  }
+  def('requestDoc', 'public', true, function (db, p) {
+    var q = selfOne(db, p), cfg = db.cfg();
+    if (cfg.gonggyeolOpen !== 'Y') fail('지금은 공결공문 신청 기간이 아닙니다.');
+    var recipient = s(p.recipient).slice(0, 80), target = s(p.target) === '반주자' ? '반주자' : '본인';
+    if (!recipient) fail('수신처(학교장·부대장·기관장)를 적어 주세요.');
+    if (target === '반주자' && !s(p.accompName)) fail('반주자 이름을 적어 주세요.');
+    var mine = db.t('Requests').filter(function (r) { return r.pid === q.id && r.status !== '취소'; });
+    if (mine.length >= 5) fail('신청은 한 사람당 5건까지 할 수 있어요. 사무국에 문의해 주세요.');
+    var r = { reqId: 'Q' + db.store.uid().slice(0, 10), pid: q.id, kind: 'gonggyeol', recipient: recipient, attn: s(p.attn).slice(0, 60), target: target,
+      accompName: s(p.accompName).slice(0, 30), note: s(p.note).slice(0, 300), status: '신청', createdAt: db.store.now() };
+    db.append('Requests', [r]);
+    db.log(q.name, 'requestDoc', recipient);
+    return myRequests(db, q.id);
+  });
+  def('cancelRequest', 'public', true, function (db, p) {
+    var q = selfOne(db, p), r = db.t('Requests').filter(function (x) { return x.reqId === s(p.reqId) && x.pid === q.id; })[0];
+    if (!r) fail('신청을 찾을 수 없어요.');
+    if (r.status === '발급') fail('이미 발급된 공문은 취소할 수 없어요. 사무국에 문의해 주세요.');
+    db.upsert('Requests', [{ reqId: r.reqId, status: '취소', decidedAt: db.store.now() }]);
+    return myRequests(db, q.id);
+  });
+  def('decideRequest', 'admin', true, function (db, p) {
+    var ids = (p.reqIds || [p.reqId]).map(s).filter(Boolean), st = s(p.status);
+    if (['신청', '반려', '취소', '확인', '발급'].indexOf(st) < 0) fail('상태값이 올바르지 않습니다.');
+    db.upsert('Requests', ids.map(function (id) { return { reqId: id, status: st, reply: s(p.reply), decidedAt: db.store.now() }; }));
+    return true;
+  });
+  def('saveRequest', 'admin', true, function (db, p) {
+    var r = p.request || {}, id = s(r.reqId) || ('Q' + db.store.uid().slice(0, 10));
+    var o = { reqId: id }; ['pid', 'kind', 'recipient', 'attn', 'target', 'accompName', 'note', 'status'].forEach(function (k) { if (k in r) o[k] = s(r[k]); });
+    if (!s(r.reqId)) { o.createdAt = db.store.now(); o.kind = o.kind || 'gonggyeol'; o.status = o.status || '확인'; }
+    db.upsert('Requests', [o]);
+    return id;
+  });
+
+  def('submitPrize', 'public', true, function (db, p) {
+    var q = selfOne(db, p), cfg = db.cfg();
+    if (cfg.prizeOpen !== 'Y') fail('지금은 상금 수령 정보를 받지 않습니다.');
+    var pv = participantView(db, q), r2 = pv.rounds.R2;
+    if (!(r2 && r2.result && r2.result.award)) fail('입상자만 입력할 수 있어요.');
+    var enc = function (v) { v = s(v); if (!/^E1\.[A-Za-z0-9+/=._-]+$/.test(v)) fail('개인정보 암호화가 되지 않았습니다. 화면을 새로 고친 뒤 다시 시도해 주세요.'); return v; };
+    var holderType = s(p.holderType) === '보호자' ? '보호자' : '본인';
+    if (!s(p.holder) || !s(p.bank)) fail('예금주와 은행을 적어 주세요.');
+    if (!p.agree) fail('개인정보 수집·이용에 동의해 주세요.');
+    var cur = db.t('Prizes').filter(function (x) { return x.pid === q.id; })[0] || {};
+    if (!cur.bankFile) fail('통장 사본을 올려 주세요.');
+    if (!cur.familyFile) fail('주민등록번호가 보이는 서류(주민등록등본 또는 주민등록증·운전면허증)를 올려 주세요.');
+    if (!p.idRrn) fail('주민등록번호 뒷자리까지 보이는 서류를 올렸는지 확인해 주세요.');
+    var o = { pid: q.id, holderType: holderType, holder: s(p.holder).slice(0, 30), relation: holderType === '보호자' ? s(p.relation).slice(0, 10) : '본인',
+      bank: s(p.bank).slice(0, 20), accountEnc: enc(p.accountEnc), accountMask: s(p.accountMask).replace(/[^\d*-]/g, '').slice(0, 24),
+      attend: s(p.attend).slice(0, 10), attendCount: digits(p.attendCount).slice(0, 2), mailAddress: s(p.mailAddress).slice(0, 200),
+      agreeAt: db.store.now(), submittedAt: db.store.now(), status: '제출' };
+    if (cfg.collectRrn === 'Y') { o.rrnEnc = enc(p.rrnEnc); o.rrnMask = s(p.rrnMask).replace(/[^\d*-]/g, '').slice(0, 14); }
+    db.upsert('Prizes', [o]);
+    db.log(q.name, 'submitPrize', '');
+    return prizeView(db, q, r2.result.award);
+  });
+  def('prizeAttach', 'public', true, function (db, p) {
+    var q = selfOne(db, p), col = { bank: 'bankFile', family: 'familyFile' }[s(p.kind)];
+    if (!col) fail('알 수 없는 파일 종류');
+    var ref = s(p.ref);
+    if (!/^(drive:[\w-]{10,}|demo:.{1,120})$/.test(ref)) fail('파일 정보가 올바르지 않습니다.');
+    var row = db.t('Prizes').filter(function (x) { return x.pid === q.id; })[0];
+    var o = { pid: q.id }; o[col] = ref; if (!row) o.status = '작성중';
+    if (col === 'familyFile') o.idCheck = '';
+    db.upsert('Prizes', [o]);
+    return { old: row ? row[col] || '' : '', pid: q.id };
+  });
+  def('savePrizes', 'admin', true, function (db, p) {
+    db.upsert('Prizes', (p.rows || []).map(function (r) {
+      var o = { pid: s(r.pid) }; ['amount', 'status', 'note', 'idCheck'].forEach(function (k) { if (k in r) o[k] = s(r[k]); }); return o;
+    }).filter(function (r) { return r.pid; }));
+    return true;
+  });
+
+  // ── 발급대장: 공문·확인서 번호 등록 (번호 겹치면 거절)
+  def('registerDocs', 'admin', true, function (db, p) {
+    var docs = db.t('Docs'), used = {};
+    docs.forEach(function (d) { if (d.docNo && d.status !== '취소') used[d.series + '|' + d.docNo] = 1; });
+    var now = db.store.now(), rows = [], reqs = [];
+    (p.items || []).forEach(function (it) {
+      var series = s(it.series), no = s(it.docNo);
+      if (no && used[series + '|' + no]) fail('문서번호 ' + no + '는 이미 발급대장에 있어요. 번호를 바꿔 다시 만들어 주세요.');
+      if (no) used[series + '|' + no] = 1;
+      var r = { docId: 'D' + db.store.uid().slice(0, 10), kind: s(it.kind), series: series, docNo: no, title: s(it.title), target: s(it.target), refId: s(it.refId),
+        fileId: s(it.fileId), pdfId: s(it.pdfId), url: s(it.url), createdAt: now, status: '발급', fields: typeof it.fields === 'string' ? it.fields : JSON.stringify(it.fields || {}) };
+      rows.push(r);
+      if (s(it.reqId)) reqs.push({ reqId: s(it.reqId), status: '발급', docId: r.docId, decidedAt: now });
+    });
+    if (p.dryRun) return [];
+    if (rows.length) db.append('Docs', rows);
+    if (reqs.length) db.upsert('Requests', reqs);
+    db.log('admin', 'registerDocs', rows.length + '건');
+    return rows;
+  });
+  def('updateDoc', 'admin', true, function (db, p) {
+    var o = { docId: s(p.docId) }; ['status', 'fileId', 'pdfId', 'url'].forEach(function (k) { if (k in p) o[k] = s(p[k]); });
+    db.upsert('Docs', [o]);
+    if (o.status === '취소') db.t('Requests').filter(function (r) { return r.docId === o.docId; }).forEach(function (r) { db.upsert('Requests', [{ reqId: r.reqId, status: '확인', docId: '' }]); });
+    return true;
+  });
+  // 본인 문서 내려받기 확인 (참가자: 이름·생년월일·휴대폰, 인력: 링크)
+  def('myDoc', 'public', false, function (db, p) {
+    var d = db.t('Docs').filter(function (x) { return x.docId === s(p.docId) && x.status !== '취소'; })[0];
+    if (!d) fail('문서를 찾을 수 없어요.');
+    if (s(p.t)) { var st = staffByToken(db, p); if (d.refId !== st.staffId) fail('본인 문서만 받을 수 있어요.'); }
+    else {
+      var q = selfOne(db, p);
+      var ok = d.refId === q.id || db.t('Requests').some(function (r) { return r.reqId === d.refId && r.pid === q.id; });
+      if (!ok) fail('본인 문서만 받을 수 있어요.');
+    }
+    return { docId: d.docId, kind: d.kind, title: d.title, docNo: d.docNo, fileId: d.fileId, pdfId: d.pdfId, fields: d.fields };
+  });
+  // 정산이 끝난 뒤 제출 서류(신분증·통장 사본) 파일 정리 — 지울 파일 목록을 돌려주고 칸을 비움
+  def('clearFiles', 'admin', true, function (db, p) {
+    var refs = [];
+    if (s(p.who) === 'prize') {
+      var pr = db.t('Prizes').filter(function (x) { return (p.ids || []).indexOf(x.pid) >= 0; });
+      pr.forEach(function (x) { [x.bankFile, x.familyFile].forEach(function (r) { if (r) refs.push(r); }); });
+      db.upsert('Prizes', pr.map(function (x) { return { pid: x.pid, bankFile: '', familyFile: '' }; }));
+    } else {
+      var sf = db.t('Staff').filter(function (x) { return (p.ids || []).indexOf(x.staffId) >= 0; });
+      sf.forEach(function (x) { [x.idFile, x.bankFile].forEach(function (r) { if (r) refs.push(r); }); });
+      db.upsert('Staff', sf.map(function (x) { return { staffId: x.staffId, idFile: '', bankFile: '' }; }));
+    }
+    db.log('admin', 'clearFiles', refs.length + '개');
+    return refs;
+  });
+
+  /* ---------------- 진입점 ---------------- */
+  var ROLE_OK = { admin: ['admin'], desk: ['desk', 'admin'], judge: ['judge'] };
+  function handle(req, store) {
+    try {
+      req = req || {};
+      var a = A[req.action];
+      if (!a) fail('알 수 없는 요청입니다: ' + req.action);
+      var db = makeDb(store), auth = null;
+      if (a.role !== 'public') {
+        auth = readToken(db, req.token);
+        if (!auth || ROLE_OK[a.role].indexOf(auth.role) < 0) return { ok: false, error: '로그인이 필요합니다.', needLogin: true };
+      }
+      var run = function () { db.invalidate(); return a.run(db, req.params || {}, auth); };
+      var data = a.write ? store.withLock(run) : run();
+      return { ok: true, data: data };
+    } catch (e) {
+      return { ok: false, error: e && e.userFacing ? e.message : ('처리 중 오류: ' + (e && e.message ? e.message : e)) };
+    }
+  }
+
+  return {
+    SCHEMA: SCHEMA, KEYS: KEYS, DEFAULT_CONFIG: DEFAULT_CONFIG, handle: handle,
+    matchDeposits: matchDeposits, normBirth: normBirth, normPhone: normPhone, isPaid: isPaid, isActive: isActive,
+    makeGroupKey: makeGroupKey, groupLabel: groupLabel, roundCfg: roundCfg, toMin: toMin, fromMin: fromMin,
+    normDate: normDate, normTime: normTime, cmpKo: cmpKo, digits: digits, randToken: randToken,
+    parsePieces: parsePieces, normPieces: normPieces, piecesFor: piecesFor, pieceLine: pieceLine, piecesText: piecesText,
+    splitDivision: splitDivision, normCategory: normCategory, pieceEditState: pieceEditState, regionOf: regionOf, isFar: isFar,
+    planDay: planDay, planAll: planAll, durMin: durMin, parseSec: parseSec, fmtSec: fmtSec, parseBlocks: parseBlocks,
+    withholding: withholding, prizeTable: prizeTable, prizeAmount: prizeAmount, workMinutes: workMinutes, staffPay: staffPay, weekKey: weekKey,
+    parseIdText: parseIdText, parseBankText: parseBankText, judgeCovers: judgeCovers,
+    authOf: function (store, tk) { return readToken(makeDb(store), tk); }
+  };
+})();
+if (typeof module !== 'undefined') module.exports = KC;

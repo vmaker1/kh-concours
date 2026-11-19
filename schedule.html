@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>경연 시간표</title>
+<link rel="stylesheet" href="style.css">
+<style id="ttcss"></style>
+<style>
+  .ttd { border-bottom: 1px solid var(--line); }
+  .bar2 { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 14px; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <p class="small" id="org" style="margin-bottom:6px;opacity:.8"></p>
+    <h1 id="ttl">경연 시간표</h1>
+    <p>부문·조별 경연 시각이에요. 내 조와 연주 순서는 <a href="index.html" style="color:#fff;text-decoration:underline">본인 조회</a>에서 확인하세요.</p>
+  </div>
+</header>
+<main class="wrap lift" style="padding-bottom:60px;max-width:900px">
+  <div class="card fade" id="box"><div class="loading">불러오는 중…</div></div>
+</main>
+<script src="config.js"></script>
+<script src="core.js"></script>
+<script src="store-local.js"></script>
+<script src="app.js"></script>
+<script src="timetable.js"></script>
+<script>
+{
+  const { $, $$, esc, api } = App;
+  App.demoBar();
+  document.getElementById('ttcss').textContent = TT.CSS;
+  let DATA = null, VIEW = 'day', DIV = '', ROUND = '';
+  api('publicSchedule').then(d => {
+    DATA = d; App.applyTheme(d.themeColor);
+    $('#ttl').textContent = (d.title || '') + ' 시간표';
+    $('#org').textContent = d.organizer || '';
+    document.title = (d.title || '콩쿠르') + ' 시간표';
+    const rs = [...new Set(d.sessions.map(s => s.round))].sort();
+    ROUND = rs[rs.length - 1] || '';
+    render();
+  }).catch(e => { $('#box').innerHTML = '<div class="note bad">' + esc(e.message) + '</div>'; });
+  function render() {
+    const d = DATA;
+    if (!d.sessions.length) { $('#box').innerHTML = '<div class="empty">아직 공개된 시간표가 없어요. 조편성 공지 후 이곳에 올라옵니다.</div>'; return; }
+    const rs = [...new Set(d.sessions.map(s => s.round))].sort();
+    const divs = [...new Set(d.sessions.filter(s => s.round === ROUND).map(s => s.groupKey.split('|')[0]))];
+    const list = d.sessions.filter(s => s.round === ROUND && (!DIV || s.groupKey.split('|')[0] === DIV));
+    const days = TT.buildDays(list, []);
+    const info = { title: d.title, r1Name: d.r1Name, r2Name: d.r2Name, drawLeadMin: d.drawLeadMin, pubCountR1: d.pubCountR1, pubCountR2: d.pubCountR2 };
+    $('#box').innerHTML = '<div class="bar2">' + (rs.length > 1 ? '<div class="seg">' + rs.map(r => '<button data-r="' + r + '" class="' + (r === ROUND ? 'on' : '') + '">' + esc(r === 'R2' ? d.r2Name : d.r1Name) + '</button>').join('') + '</div>' : '') +
+      '<div class="seg"><button data-v="day" class="' + (VIEW === 'day' ? 'on' : '') + '">날짜별</button><button data-v="cal" class="' + (VIEW === 'cal' ? 'on' : '') + '">달력</button></div></div>' +
+      '<div class="chips" style="margin-bottom:8px"><button class="chip ' + (!DIV ? 'on' : '') + '" data-dv="">전체</button>' + divs.map(v => '<button class="chip ' + (DIV === v ? 'on' : '') + '" data-dv="' + esc(v) + '">' + esc(v) + '</button>').join('') + '</div>' +
+      (VIEW === 'day' ? days.map(x => TT.dayDoc(x, info, 'public')).join('') : '<div class="scroll">' + TT.calendar(TT.buildDays(d.sessions.filter(s => !DIV || s.groupKey.split('|')[0] === DIV), []), info, 'share') + '</div>') +
+      '<p class="small muted" style="margin-top:14px">문의: ' + esc(d.contact || '') + '</p>';
+    $$('[data-r]').forEach(b => b.addEventListener('click', () => { ROUND = b.dataset.r; DIV = ''; render(); }));
+    $$('[data-v]').forEach(b => b.addEventListener('click', () => { VIEW = b.dataset.v; render(); }));
+    $$('[data-dv]').forEach(b => b.addEventListener('click', () => { DIV = b.dataset.dv; render(); }));
+  }
+}
+</script>
+</body>
+</html>

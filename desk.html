@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>현장 출석·추첨</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .scan { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+  #reader { max-width: 420px; margin: 10px auto 0; border-radius: 12px; overflow: hidden; }
+  .who { border: 2px solid var(--accent); border-radius: 14px; padding: 16px; background: #fff; margin-top: 12px; }
+  .who .nm { font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
+  .who input.dn { font-size: 30px; text-align: center; font-weight: 800; max-width: 140px; min-height: 60px; }
+  td input.dn { width: 72px; text-align: center; font-weight: 700; padding: 6px; min-height: 38px; }
+  .att button { min-height: 36px; padding: 4px 10px; font-size: 14px; }
+  .att button.on.y { background: var(--ok); color: #fff; border-color: var(--ok); }
+  .att button.on.n { background: #555; color: #fff; border-color: #555; }
+  .top .seg { border-color: rgba(255,255,255,.4); }
+  .top .seg button { background: transparent; color: #fff; border: 0; min-height: 38px; }
+  .top .seg button.on { background: #fff; color: var(--accent); }
+  .brow { display: grid; grid-template-columns: 3.4em minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .brow:last-child { border-bottom: 0; }
+  .brow .bn { font-size: 24px; font-weight: 800; text-align: center; font-variant-numeric: tabular-nums; }
+  .brow .bs { display: flex; gap: 6px; align-items: center; }
+  .brow.now { background: var(--accent-soft); box-shadow: inset 4px 0 0 var(--accent); }
+  .brow.gone { opacity: .45; }
+  .brow .pcs { margin-top: 4px; }
+</style>
+</head>
+<body>
+<div id="app"><div class="loading">불러오는 중…</div></div>
+<script src="config.js"></script>
+<script src="core.js"></script>
+<script src="store-local.js"></script>
+<script src="lib/html5-qrcode.min.js"></script>
+<script src="app.js"></script>
+<script>
+{
+  const { $, $$, esc, api, toast, busy, fmtDate, fmtBirth, confirmBox } = App;
+  App.demoBar();
+  const app = $('#app');
+  let CUR = null, DATA = null, scanner = null, showAll = false, lastCode = '', lastAt = 0, boardTimer = null;
+  let MODE = (() => { try { return sessionStorage.getItem('kc_desk_mode') || 'desk'; } catch (e) { return 'desk'; } })();
+  const setMode = m => { MODE = m; try { sessionStorage.setItem('kc_desk_mode', m); } catch (e) { } };
+  const byPerf = (a, b) => (a.perfOrder == null ? 9999 + a.seq : a.perfOrder) - (b.perfOrder == null ? 9999 + b.seq : b.perfOrder);
+
+  function needLogin() { App.loginView(app, 'desk', '현장 출석·추첨', '진행요원 PIN을 입력해 주세요.', () => home()); }
+  function onErr(e) { if (e.needLogin) needLogin(); else toast(e.message, 'bad'); }
+
+  function home() {
+    stopScan(); CUR = null; clearInterval(boardTimer);
+    api('deskHome', {}, 'desk').then(h => {
+      const td = App.today();
+      let list = h.sessions;
+      const hasToday = list.some(s => s.date === td);
+      if (hasToday && !showAll) list = list.filter(s => s.date === td);
+      const by = {}; list.forEach(s => (by[s.date] = by[s.date] || []).push(s));
+      app.innerHTML = '<header class="top"><div class="wrap"><div class="brand">' + esc(h.title) + '<small>현장 출석·추첨</small></div><span class="sp"></span><button class="sm" id="lo">나가기</button></div></header>' +
+        '<main class="wrap narrow" style="padding-top:20px;padding-bottom:40px">' +
+        (hasToday ? '<div class="row" style="margin-bottom:8px"><span class="muted small">' + (showAll ? '전체 일정' : '오늘 일정만 보는 중') + '</span><span class="sp"></span><button class="sm" id="all">' + (showAll ? '오늘만 보기' : '전체 일정 보기') + '</button></div>' : '') +
+        (list.length ? Object.keys(by).sort().map(d => '<h3 style="margin:16px 0 8px">' + esc(fmtDate(d, true)) + '</h3>' + by[d].map(s =>
+          '<button class="scard" data-s="' + esc(s.sessionId) + '"><div class="row"><b style="font-size:18px">' + esc(s.groupLabel) + ' ' + esc(s.label) + '</b><span class="badge">' + esc(s.roundName) + '</span><span class="sp"></span><span class="num small">추첨 ' + esc(s.drawTime) + ' · 시작 ' + esc(s.startTime) + '</span></div>' +
+          '<div class="row small muted" style="margin-top:4px">출석 <b class="num">' + s.attended + '</b>/' + s.count + ' · 추첨 <b class="num">' + s.drawn + '</b>/' + s.count + '<span class="sp"></span>' + esc(s.venue) + '</div></button>').join('')).join('') : '<div class="empty">편성된 조가 아직 없습니다.</div>') + '</main>';
+      $$('[data-s]').forEach(b => b.addEventListener('click', () => open(b.dataset.s)));
+      const al = $('#all'); if (al) al.addEventListener('click', () => { showAll = !showAll; home(); });
+      $('#lo').addEventListener('click', () => { App.setToken('desk', null); needLogin(); });
+    }).catch(onErr);
+  }
+
+  function open(sid, keepWho) {
+    CUR = sid;
+    return api('deskSession', { sessionId: sid }, 'desk').then(d => { DATA = d; MODE === 'board' ? renderBoard() : render(keepWho); }).catch(onErr);
+  }
+
+  function render(keepWho) {
+    const d = DATA, se = d.session;
+    const att = d.list.filter(x => x.attend === 'Y').length, abs = d.list.filter(x => x.attend === 'N').length, drawn = d.list.filter(x => x.drawNo).length;
+    const whoHtml = keepWho && $('#who') ? $('#who').innerHTML : '';
+    const q = $('#q') ? $('#q').value : '';
+    clearInterval(boardTimer);
+    app.innerHTML = headerHTML() +
+      '<main class="wrap" style="padding-top:16px;padding-bottom:40px;max-width:900px">' +
+      '<div class="grid g4" style="margin-bottom:14px"><div class="kpi hl"><b>' + att + '</b><span>출석 / ' + d.list.length + '명</span></div><div class="kpi"><b>' + abs + '</b><span>불참</span></div><div class="kpi"><b>' + (d.list.length - att - abs) + '</b><span>미확인</span></div><div class="kpi"><b>' + drawn + '</b><span>추첨 완료</span></div></div>' +
+      '<div class="card"><label class="f" for="q">접수증 QR · 접수번호 · 이름</label><div class="scan"><input id="q" placeholder="QR 스캐너로 찍거나 이름을 입력" value="' + esc(q) + '" autocomplete="off"><button class="pri" id="cam">' + (scanner ? '카메라 끄기' : '카메라로 QR') + '</button><button id="clr">지우기</button></div>' +
+      '<div id="reader"></div><div id="who">' + whoHtml + '</div></div>' +
+      '<div class="row" style="margin:18px 0 8px"><h3 style="margin:0">명단</h3><span class="sp"></span><button class="sm" id="auto">미추첨자 자동 추첨</button><button class="sm" id="prt">연주순서 출석부 인쇄</button><button class="sm" id="rf">새로고침</button></div>' +
+      '<div class="scroll card" style="padding:0"><table><thead><tr><th class="n">순번</th><th>이름</th><th class="hide-m">학교·학년</th><th class="hide-m">생년월일</th><th>출석</th><th class="c">추첨번호</th><th class="n">연주순서</th></tr></thead><tbody id="tb"></tbody></table></div></main>';
+    drawRows();
+    bindHeader();
+    $('#rf').addEventListener('click', () => open(CUR).then(() => toast('새로 불러왔어요')));
+    $('#q').addEventListener('input', drawRows);
+    $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); lookup($('#q').value); } });
+    $('#clr').addEventListener('click', () => { $('#q').value = ''; $('#who').innerHTML = ''; drawRows(); $('#q').focus(); });
+    $('#cam').addEventListener('click', () => scanner ? stopScan(true) : startScan());
+    $('#auto').addEventListener('click', autoDraw);
+    $('#prt').addEventListener('click', printOrder);
+    bindWho();
+  }
+
+  function drawRows() {
+    const q = ($('#q') || {}).value || '';
+    const qq = q.trim().replace(/^KC:/i, '');
+    let list = DATA.list;
+    if (qq && !/^[A-Z0-9]{10}$/.test(qq)) list = list.filter(x => (x.name || '').indexOf(qq) >= 0 || String(x.pid) === qq || (x.school || '').indexOf(qq) >= 0);
+    $('#tb').innerHTML = list.map(x => '<tr data-e="' + esc(x.entryId) + '" class="' + (x.attend === 'N' ? 'dim' : '') + '"><td class="n">' + x.seq + '</td><td><b>' + esc(x.name) + '</b><div class="small muted" style="display:none">' + esc(x.school) + '</div></td><td class="hide-m small">' + esc(x.school) + ' ' + esc(x.grade) + '</td><td class="hide-m num small">' + esc(fmtBirth(x.birth)) + '</td>' +
+      '<td class="att"><div class="row" style="gap:4px;flex-wrap:nowrap"><button class="y ' + (x.attend === 'Y' ? 'on' : '') + '" data-a="Y">출석</button><button class="n ' + (x.attend === 'N' ? 'on' : '') + '" data-a="N">불참</button></div></td>' +
+      '<td class="c"><input class="dn" inputmode="numeric" value="' + esc(x.drawNo) + '" aria-label="' + esc(x.name) + ' 추첨번호"></td><td class="n"><b>' + (x.perfOrder != null ? x.perfOrder : '') + '</b></td></tr>').join('') ||
+      '<tr><td colspan="7" class="muted c">검색 결과가 없어요. Enter를 누르면 다른 조까지 찾아봅니다.</td></tr>';
+    $$('#tb tr[data-e]').forEach(tr => {
+      const x = DATA.list.find(y => y.entryId === tr.dataset.e);
+      $$('[data-a]', tr).forEach(b => b.addEventListener('click', () => setEntry(x, { attend: x.attend === b.dataset.a ? '' : b.dataset.a })));
+      const inp = $('input.dn', tr);
+      inp.addEventListener('change', () => setEntry(x, { drawNo: inp.value.trim(), attend: inp.value.trim() ? 'Y' : x.attend }));
+    });
+  }
+
+  function setEntry(x, patch) {
+    api('setEntry', Object.assign({ entryId: x.entryId }, patch), 'desk').then(() => open(CUR, true)).catch(e => { onErr(e); open(CUR, true); });
+  }
+
+  function headerHTML() {
+    const d = DATA, se = d.session;
+    return '<header class="top"><div class="wrap"><button class="sm" id="bk">← 조 목록</button><div class="brand">' + esc(d.groupLabel) + ' ' + esc(se.label) + '<small>' + esc(d.roundName) + ' · ' + esc(fmtDate(se.date)) + ' 추첨 ' + esc(se.drawTime) + ' · 시작 ' + esc(se.startTime) + '</small></div><span class="sp"></span>' +
+      '<div class="seg" role="tablist"><button data-m="desk" class="' + (MODE === 'desk' ? 'on' : '') + '">출석·추첨</button><button data-m="board" class="' + (MODE === 'board' ? 'on' : '') + '">순서판</button></div></div></header>';
+  }
+  function bindHeader() {
+    $('#bk').addEventListener('click', home);
+    $$('[data-m]').forEach(b => b.addEventListener('click', () => { if (b.dataset.m === MODE) return; stopScan(); setMode(b.dataset.m); open(CUR); }));
+  }
+
+  /* ---------- 순서판: 추첨 후 각 포지션(대기실·무대·진행·방송)이 같이 보는 화면 ---------- */
+  function renderBoard() {
+    const d = DATA, se = d.session;
+    const list = d.list.slice().sort(byPerf), live = list.filter(x => x.attend !== 'N');
+    const ci = live.findIndex(x => x.entryId === d.current);
+    const stateOf = x => {
+      if (x.attend === 'N') return ['불참', ''];
+      const i = live.indexOf(x);
+      if (ci < 0) return i < 3 ? (i === 0 ? ['첫 순서', 'acc'] : ['대기', 'warn']) : ['', ''];
+      if (i === ci) return ['지금 연주', 'acc'];
+      if (i === ci + 1) return ['다음', 'warn'];
+      if (i > ci + 1 && i <= ci + 3) return ['대기', ''];
+      if (i < ci) return ['끝', 'ok'];
+      return ['', ''];
+    };
+    const now = ci >= 0 ? live[ci] : null, nx = live[ci + 1];
+    const undrawn = list.filter(x => !x.drawNo).length;
+    const scrollY = window.scrollY;
+    app.innerHTML = headerHTML() + '<main class="wrap" style="padding-top:16px;padding-bottom:40px;max-width:900px">' +
+      (undrawn ? '<div class="note warn" style="margin-bottom:12px">아직 추첨번호가 없는 연주자가 ' + undrawn + '명 있어요. 추첨이 끝나야 연주순서가 확정됩니다.</div>' : '') +
+      '<div class="card" style="border:2px solid var(--accent)"><div class="row"><span class="badge acc">지금 연주</span><span class="sp"></span><span class="small muted">' + (live.length ? (ci + 1) + ' / ' + live.length + '명' : '') + '</span></div>' +
+      (now ? '<div style="font-size:30px;font-weight:800;letter-spacing:-.02em;margin-top:4px">' + esc(now.perfOrder != null ? now.perfOrder + '번 ' : '') + esc(now.name) + '</div><div class="muted">' + esc(now.school) + ' ' + esc(now.grade) + '</div>' + (now.pieces && now.pieces.length ? '<div style="margin-top:8px">' + App.piecesHTML(now.pieces) + '</div>' : '')
+        : '<p class="muted" style="margin:6px 0 0">아직 시작 전이에요. 첫 연주자가 무대에 오르면 \'다음 ▶\'을 눌러 주세요.</p>') +
+      (nx ? '<div class="small" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><b>다음</b> ' + esc(nx.perfOrder != null ? nx.perfOrder + '번 ' : '') + esc(nx.name) + ' · ' + esc(nx.school) + '</div>' : '') +
+      '<div class="row" style="margin-top:14px"><button class="big" id="pv" ' + (ci <= 0 ? 'disabled' : '') + '>◀ 이전</button><button class="pri big" id="nxb" style="flex:1" ' + (ci >= live.length - 1 && ci >= 0 ? 'disabled' : '') + '>다음 ▶</button></div>' +
+      '<p class="small muted" style="margin:8px 0 0">무대 담당이 누르면 순서판을 연 모든 담당자와 심사위원 화면에 바로 반영돼요. (10초마다 자동 새로고침)</p></div>' +
+      '<div class="row" style="margin:18px 0 8px"><h3 style="margin:0">연주순서</h3><span class="sp"></span><button class="sm" id="prt">연주순서 출석부 인쇄</button><button class="sm" id="rf">새로고침</button></div>' +
+      '<div class="card" style="padding:0">' + list.map(x => { const [st, cls] = stateOf(x); return '<div class="brow ' + (x.entryId === d.current ? 'now' : '') + (x.attend === 'N' ? ' gone' : '') + '" data-e="' + esc(x.entryId) + '">' +
+        '<div class="bn">' + (x.perfOrder != null ? x.perfOrder : '<span class="small muted">순번 ' + x.seq + '</span>') + '</div>' +
+        '<div><b>' + esc(x.name) + '</b> <span class="small muted">' + esc(x.school) + ' ' + esc(x.grade) + (x.attend === 'Y' ? '' : x.attend === 'N' ? '' : ' · 출석 미확인') + '</span>' + (x.pieces && x.pieces.length ? App.piecesHTML(x.pieces, { cls: 'sm' }) : '') + '</div>' +
+        '<div class="bs">' + (st ? '<span class="badge ' + cls + '">' + st + '</span>' : '') + (x.attend !== 'N' && x.entryId !== d.current ? '<button class="ghost sm" data-now="' + esc(x.entryId) + '">지금</button>' : '') + '</div></div>'; }).join('') + '</div></main>';
+    window.scrollTo(0, scrollY);
+    bindHeader();
+    const go = eid => api('setCurrent', { sessionId: CUR, entryId: eid }, 'desk').then(() => open(CUR)).catch(onErr);
+    $('#nxb').addEventListener('click', () => { const t = live[ci + 1]; if (t) go(t.entryId); });
+    $('#pv').addEventListener('click', () => { const t = live[ci - 1]; if (t) go(t.entryId); });
+    $$('[data-now]').forEach(b => b.addEventListener('click', () => go(b.dataset.now)));
+    $('#prt').addEventListener('click', printOrder);
+    $('#rf').addEventListener('click', () => open(CUR));
+    clearInterval(boardTimer);
+    boardTimer = setInterval(() => { if (MODE === 'board' && CUR && !document.hidden) open(CUR); }, 10000);
+  }
+
+  function lookup(code, force) {
+    code = String(code || '').trim();
+    if (!code) return;
+    const raw = code.replace(/^KC:/i, '');
+    const local = DATA.list.filter(x => x.name === raw || String(x.pid) === raw);
+    if (!/^KC:/i.test(code) && !/^[A-Z0-9]{10}$/i.test(raw) && local.length === 1) return checkin({ pid: local[0].pid });
+    if (!/^KC:/i.test(code) && !/^[A-Z0-9]{10}$/i.test(raw) && local.length > 1) { toast('같은 이름이 ' + local.length + '명이에요. 명단에서 직접 눌러 주세요.'); return; }
+    checkin({ code: code }, force);
+  }
+  function checkin(p, force) {
+    api('checkin', Object.assign({ sessionId: CUR, round: DATA.round, force: !!force }, p), 'desk').then(r => {
+      if (r.warn && !r.checkedIn) {
+        $('#who').innerHTML = '<div class="who" style="border-color:var(--warn)"><div class="note warn"><b>' + esc(r.participant.name) + '</b> — ' + esc(r.warn) + '</div><div class="row" style="margin-top:10px"><button id="frc">그래도 이 조에서 출석 처리</button><button class="ghost" id="cn">취소</button></div></div>';
+        $('#frc').addEventListener('click', () => checkin(p, true));
+        $('#cn').addEventListener('click', () => { $('#who').innerHTML = ''; });
+        return;
+      }
+      if (navigator.vibrate) navigator.vibrate(60);
+      open(CUR).then(() => showWho(r));
+    }).catch(onErr);
+  }
+  function showWho(r) {
+    const x = DATA.list.find(y => y.entryId === r.entryId) || {};
+    $('#who').innerHTML = '<div class="who fade" data-e="' + esc(r.entryId) + '"><div class="row"><span class="badge ok">출석 완료</span>' + (r.warn ? '<span class="badge warn">' + esc(r.warn) + '</span>' : '') + '</div>' +
+      '<div class="nm">' + esc(r.participant.name) + '</div><div class="muted">' + esc(r.participant.school || '') + ' ' + esc(r.participant.grade || '') + ' · 생년월일 <b>' + esc(fmtBirth(r.participant.birth)) + '</b>' + (x.guardian ? ' · 보호자 ' + esc(x.guardian) : '') + '</div>' +
+      '<p class="small muted" style="margin:6px 0 10px">접수증·신분증의 이름과 생년월일을 확인한 뒤, 뽑은 추첨번호를 넣어 주세요.</p>' +
+      '<form class="row" id="wf"><label class="f" for="wdn" style="margin:0">추첨번호</label><input class="dn" id="wdn" inputmode="numeric" value="' + esc(r.drawNo || x.drawNo || '') + '"><button class="pri big">저장</button></form></div>';
+    bindWho();
+    setTimeout(() => { const i = $('#wdn'); if (i) i.focus(); }, 50);
+  }
+  function bindWho() {
+    const f = $('#wf'); if (!f) return;
+    f.addEventListener('submit', e => {
+      e.preventDefault();
+      const eid = $('.who').dataset.e, v = $('#wdn').value.trim();
+      api('setEntry', { entryId: eid, drawNo: v, attend: 'Y' }, 'desk').then(() => {
+        toast(v ? '추첨번호 ' + v + '번 저장' : '저장했어요', 'ok');
+        $('#q').value = ''; $('#who').innerHTML = '';
+        open(CUR).then(() => $('#q').focus());
+      }).catch(onErr);
+    });
+  }
+
+  function startScan() {
+    if (typeof Html5Qrcode === 'undefined') { toast('QR 스캐너를 불러오지 못했어요. 접수번호나 이름으로 찾아 주세요.', 'bad'); return; }
+    scanner = new Html5Qrcode('reader');
+    scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 220 }, text => {
+      const now = Date.now();
+      if (text === lastCode && now - lastAt < 4000) return;
+      lastCode = text; lastAt = now;
+      lookup(text);
+    }).then(() => { const b = $('#cam'); if (b) b.textContent = '카메라 끄기'; })
+      .catch(err => { scanner = null; toast('카메라를 켤 수 없어요: ' + err, 'bad'); });
+  }
+  function stopScan(rerender) {
+    if (!scanner) return;
+    const s = scanner; scanner = null;
+    s.stop().catch(() => {}).finally(() => { try { s.clear(); } catch (e) { } });
+    const b = $('#cam'); if (b) b.textContent = '카메라로 QR';
+  }
+
+  function autoDraw() {
+    const left = DATA.list.filter(x => !x.drawNo).length;
+    if (!left) { toast('모두 추첨번호가 있어요'); return; }
+    confirmBox('추첨번호가 없는 ' + left + '명에게 남은 번호를 무작위로 배정할까요?\n현장 추첨을 못 한 경우에만 써 주세요.', '자동 추첨').then(ok => {
+      if (!ok) return;
+      api('autoDraw', { sessionId: CUR }, 'desk').then(n => { toast(n + '명 배정', 'ok'); open(CUR); }).catch(onErr);
+    });
+  }
+
+  function printOrder() {
+    const d = DATA, se = d.session;
+    const list = d.list.slice().sort((a, b) => (a.perfOrder == null ? 9999 + a.seq : a.perfOrder) - (b.perfOrder == null ? 9999 + b.seq : b.perfOrder));
+    const wp = list.some(x => x.pieces && x.pieces.length);
+    App.printHTML('<div class="pr"><h1>' + esc(d.title) + ' — ' + esc(d.roundName) + ' 연주순서 출석부</h1><div class="meta"><span>' + esc(d.groupLabel) + ' ' + esc(se.label) + '</span><span>' + esc(fmtDate(se.date, true)) + ' 시작 ' + esc(se.startTime) + '</span><span>' + list.length + '명</span></div>' +
+      '<table><thead><tr><th>연주순서</th><th>조별순서</th><th>이름</th><th>학교·학년</th>' + (wp ? '<th>곡목</th>' : '<th>생년월일</th>') + '<th>출석</th><th>비고</th></tr></thead><tbody>' +
+      list.map(x => '<tr><td class="c"><b>' + (x.perfOrder != null ? x.perfOrder : '') + '</b></td><td class="c">' + esc(x.drawNo) + '</td><td>' + esc(x.name) + '</td><td>' + esc(x.school) + ' ' + esc(x.grade) + '</td>' + (wp ? '<td>' + App.piecesHTML(x.pieces) + '</td>' : '<td>' + esc(fmtBirth(x.birth)) + '</td>') + '<td class="c">' + (x.attend === 'Y' ? '○' : x.attend === 'N' ? '불참' : '') + '</td><td></td></tr>').join('') + '</tbody></table></div>');
+  }
+
+  if (App.getToken('desk')) home(); else needLogin();
+}
+</script>
+</body>
+</html>

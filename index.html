@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>참가자 본인 조회</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .res-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  .res-h h2 { margin: 0; font-size: 26px; }
+  .sched { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 10px 16px; margin: 14px 0 4px; }
+  .sched dt { color: var(--sub); font-size: 14px; font-weight: 700; padding-top: 2px; }
+  .sched dd { margin: 0; }
+  .sched dd b.t { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .round-h { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .big-res { font-size: 40px; font-weight: 800; color: var(--accent); line-height: 1; font-variant-numeric: tabular-nums; }
+  .ranks { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 6px; margin: 10px 0; }
+  .ranks div { border: 1px solid var(--line); border-radius: 10px; text-align: center; padding: 6px 0; }
+  .ranks div small { display: block; font-size: 12px; color: var(--sub); }
+  .ranks div b { font-size: 20px; font-variant-numeric: tabular-nums; }
+  .ranks div.drop b { text-decoration: line-through; color: #a39ca6; }
+  .rq { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); padding: 10px 0; }
+  .rq:first-of-type { border-top: 0; }
+  .seg { display: flex; gap: 8px; flex-wrap: wrap; }
+  .seg label { border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 14px; cursor: pointer; font-weight: 700; }
+  .seg input { display: none; }
+  .seg label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .chk { display: flex; gap: 10px; align-items: flex-start; font-weight: 700; margin-top: 10px; }
+  .chk input { width: 22px; height: 22px; min-height: 0; flex: none; margin-top: 1px; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap narrow">
+    <p class="small" id="org" style="margin-bottom:6px;opacity:.8"></p>
+    <h1 id="ttl">참가자 본인 조회</h1>
+    <p id="intro">신청할 때 적은 정보로 본인 확인 후, 내 경연 일정과 접수증, 결과를 볼 수 있어요. 다른 참가자의 정보는 보이지 않습니다.</p>
+  </div>
+</header>
+<main class="wrap narrow lift" style="padding-bottom:60px">
+  <div id="notice"></div>
+  <form class="card fade" id="f" autocomplete="off">
+    <div class="grid g2" style="gap:12px">
+      <div><label class="f" for="nm">참가자 이름</label><input id="nm" placeholder="홍길동"></div>
+      <div><label class="f" for="bd">생년월일 6자리</label><input id="bd" inputmode="numeric" maxlength="8" placeholder="예: 140325"></div>
+      <div><label class="f" for="ph">휴대폰 뒷 4자리 <span class="muted">(본인 또는 보호자)</span></label><input id="ph" inputmode="numeric" maxlength="4" placeholder="1234"></div>
+      <div><label class="f" for="no">접수번호 <span class="muted">(선택)</span></label><input id="no" inputmode="numeric" placeholder="이름 대신 써도 돼요"></div>
+    </div>
+    <button class="pri big" style="width:100%;margin-top:16px" id="go">조회하기</button>
+    <p class="small muted" style="margin:12px 0 0">개인정보 보호를 위해 세 가지 정보가 모두 맞아야 조회됩니다. 조회 화면을 닫으면 정보가 남지 않아요.</p>
+  </form>
+  <div id="out"></div>
+</main>
+<script src="config.js"></script>
+<script src="core.js"></script>
+<script src="store-local.js"></script>
+<script src="lib/qrcode.js"></script>
+<script src="lib/jszip.min.js"></script>
+<script src="forms.js"></script>
+<script src="docfill.js"></script>
+<script src="crypto.js"></script>
+<script src="app.js"></script>
+<script>
+{
+  const { $, esc, api, toast, busy, fmtDate, fmtBirth } = App;
+  App.demoBar();
+  let INFO = {}, LAST = [], Q = null, EDIT = null, RQ = null, PZ = null;
+
+  api('publicInfo').then(info => {
+    INFO = info;
+    App.applyTheme(info.themeColor);
+    $('#ttl').textContent = info.title || '참가자 본인 조회';
+    $('#org').textContent = (info.organizer || '') + ' · 참가자 본인 조회';
+    document.title = (info.shortTitle || '콩쿠르') + ' 본인 조회';
+    if (info.notice) $('#notice').innerHTML = '<div class="note" style="margin-bottom:16px">' + esc(info.notice) + '</div>';
+  }).catch(e => toast(e.message, 'bad'));
+
+  $('#f').addEventListener('submit', e => {
+    e.preventDefault();
+    const b = $('#go'); busy(b, true);
+    const q = { name: $('#nm').value, birth: $('#bd').value, phone4: $('#ph').value, id: $('#no').value };
+    api('lookup', q)
+      .then(list => { LAST = list; Q = q; EDIT = null; RQ = null; PZ = null; render(list); })
+      .catch(err => { $('#out').innerHTML = '<div class="note bad" style="margin-top:16px">' + esc(err.message) + '</div>'; })
+      .finally(() => busy(b, false));
+  });
+
+  function schedBlock(r) {
+    const se = r.session;
+    if (!se) return '<p class="muted">일정은 공지 후 이 화면에 표시됩니다.</p>';
+    return '<dl class="sched">' +
+      '<dt>일자</dt><dd><b>' + esc(fmtDate(se.date, true)) + '</b> · ' + esc(se.label) + '</dd>' +
+      '<dt>추첨 시각</dt><dd><b class="t">' + esc(se.drawTime) + '</b> <span class="muted small">이때까지 대기실 도착</span></dd>' +
+      '<dt>경연 시작</dt><dd><b class="t">' + esc(se.startTime) + '</b> <span class="muted small">조 예상 종료 ' + esc(se.endTime) + '</span></dd>' +
+      '<dt>장소</dt><dd>' + esc(se.venue) + '</dd>' +
+      '<dt>연주 순서</dt><dd>' + (r.drawNo ? '<b class="t">' + esc(r.perfOrder) + '번</b> <span class="muted small">(조 안에서 ' + esc(r.drawNo) + '번째)</span>' : '<span class="muted">현장 추첨으로 정해집니다</span>') + '</dd>' +
+      '</dl>';
+  }
+  function resultBlock(r) {
+    const x = r.result;
+    if (!x) return '';
+    if (x.absent) return '<div class="note">불참으로 처리되었습니다.</div>';
+    if (x.mode === 'ox') {
+      return '<div class="panel" style="margin-top:12px"><div class="row"><div><div class="muted small">심사위원 ' + x.of + '명 중 O</div><div class="big-res">' + x.count + '개</div></div><div class="sp"></div>' +
+        (x.pass ? '<span class="badge ok" style="font-size:16px;padding:6px 14px">본선 진출</span>' : '<span class="badge" style="font-size:16px;padding:6px 14px">본선 미진출</span>') + '</div>' +
+        (x.cutline ? '<p class="small muted" style="margin:10px 0 0">이 부문 본선 진출 기준: O ' + x.cutline + '개 이상</p>' : '') + '</div>';
+    }
+    const vals = x.values || [];
+    const sorted = vals.filter(v => v != null).slice().sort((a, b) => a - b);
+    let lo = sorted[0], hi = sorted[sorted.length - 1], usedLo = false, usedHi = false;
+    const cells = vals.map((v, i) => {
+      let drop = false;
+      if (vals.length > 2 && v === lo && !usedLo) { drop = true; usedLo = true; }
+      else if (vals.length > 2 && v === hi && !usedHi) { drop = true; usedHi = true; }
+      return '<div class="' + (drop ? 'drop' : '') + '"><small>심사 ' + (i + 1) + '</small><b>' + (v == null ? '-' : v) + '</b></div>';
+    }).join('');
+    return '<div class="panel" style="margin-top:12px"><div class="row"><div><div class="muted small">' + (x.mode === 'rank' ? '유효등위 (낮을수록 상위)' : '점수') + '</div><div class="big-res">' + esc(x.effective) + '</div></div><div class="sp"></div>' +
+      '<div style="text-align:right"><div class="muted small">순위</div><b style="font-size:24px">' + esc(x.rank) + '위</b>' + (x.award ? ' <span class="badge acc">입상</span>' : '') + '</div></div>' +
+      '<div class="ranks">' + cells + '</div>' +
+      (x.mode === 'rank' ? '<p class="small muted" style="margin:0">심사위원별 등위 중 가장 높은 등위와 가장 낮은 등위를 1개씩 빼고(취소선) 나머지를 더한 값이 유효등위예요. 등위 합계 ' + esc(x.total) + '.</p>' : '') + '</div>';
+  }
+  const RN = k => k === 'R2' ? (INFO.r2Name || '본선') : (INFO.r1Name || '예선');
+  function songsBlock(v, k, i) {
+    const list = (v.pieces && v.pieces[k]) || [], st = v.pieceEdit && v.pieceEdit[k];
+    if (!list.length && !(st && st.open)) return '';
+    if (EDIT && EDIT.i === i && EDIT.k === k) return editBlock(v, k, i, st);
+    return '<div class="panel" style="margin-top:10px"><div class="row" style="margin-bottom:6px"><b class="small">' + esc(RN(k)) + ' 곡목</b>' +
+      (v.piecesAt ? '<span class="badge">최근 수정 ' + esc(String(v.piecesAt).slice(5, 16)) + '</span>' : '<span class="small muted">신청서 기준</span>') + '<span class="sp"></span>' +
+      (st && st.open ? '<button class="sm" data-pe="' + i + '|' + k + '">곡목 수정</button>' : '') + '</div>' +
+      App.piecesHTML(list, { empty: '<p class="muted small" style="margin:0">아직 등록된 곡목이 없어요.</p>' }) +
+      '<p class="small muted" style="margin:8px 0 0">' + (st && st.open ? '심사위원에게 이 순서와 곡명 그대로 전달돼요.' + (st.until ? ' 수정 마감: <b>' + esc(st.until) + '</b>' : ' 심사가 시작되면 수정할 수 없어요.') :
+        st ? esc(st.reason) + '. 바꿔야 하면 사무국으로 연락해 주세요.' : '심사위원에게 이 순서와 곡명 그대로 전달돼요. 틀린 곳이 있으면 경연 전에 사무국으로 꼭 알려 주세요.') + '</p></div>';
+  }
+  function editBlock(v, k, i, st) {
+    const rows = EDIT.rows, ro = !st.reorder, inp = (j, f, ph) => '<input data-j="' + j + '" data-f="' + f + '" value="' + esc(rows[j][f] || '') + '" placeholder="' + ph + '" style="min-height:40px;padding:6px 10px;font-size:15px">';
+    return '<div class="panel fade" style="margin-top:10px;border:2px solid var(--accent)"><b class="small">' + esc(RN(k)) + ' 곡목 수정</b>' +
+      '<p class="small muted" style="margin:4px 0 10px">' + (ro ? '곡 순서(①②③)는 바꿀 수 없어요. 작곡가·곡명만 고쳐 주세요.' : '▲▼로 부를 순서를 바꿀 수 있어요.') + ' 오페라 아리아는 곡명 뒤에 &lt;오페라 제목&gt;을 붙여 주세요.</p>' +
+      rows.map((r, j) => '<div style="border-top:1px solid var(--line);padding:10px 0"><div class="row" style="margin-bottom:6px"><b style="color:var(--accent)">' + '①②③④⑤⑥'.charAt(j) + '</b>' +
+        (r.kind || ro ? '<span class="badge">' + esc(r.kind || '곡') + '</span>' : inp(j, 'kind', '구분 (예: 가곡)')) + '<span class="sp"></span>' +
+        (ro ? '' : '<button type="button" class="sm" data-mv="' + j + '|-1" ' + (j === 0 ? 'disabled' : '') + ' aria-label="위로">▲</button><button type="button" class="sm" data-mv="' + j + '|1" ' + (j === rows.length - 1 ? 'disabled' : '') + ' aria-label="아래로">▼</button>') + '</div>' +
+        '<div class="grid" style="grid-template-columns:minmax(0,.7fr) minmax(0,1.3fr);gap:6px">' + inp(j, 'country', '국가') + inp(j, 'composer', '작곡가') + '</div><div style="margin-top:6px">' + inp(j, 'title', '곡명') + '</div></div>').join('') +
+      '<div class="row end" style="margin-top:10px"><button type="button" id="pc">취소</button><button type="button" class="pri" id="ps">저장</button></div></div>';
+  }
+  function bindEdit() {
+    document.querySelectorAll('[data-pe]').forEach(b => b.addEventListener('click', () => {
+      const [i, k] = b.dataset.pe.split('|'), v = LAST[+i], list = (v.pieces[k] || []).map(x => Object.assign({}, x));
+      EDIT = { i: +i, k, rows: list.length ? list : (k === 'R2' ? [{}, {}, {}] : [{}, {}]) };
+      render(LAST, true);
+    }));
+    if (!EDIT) return;
+    document.querySelectorAll('[data-j]').forEach(el => el.addEventListener('input', () => { EDIT.rows[+el.dataset.j][el.dataset.f] = el.value; }));
+    document.querySelectorAll('[data-mv]').forEach(b => b.addEventListener('click', () => {
+      const [j, d] = b.dataset.mv.split('|').map(Number), r = EDIT.rows, tmp = r[j]; r[j] = r[j + d]; r[j + d] = tmp; render(LAST, true);
+    }));
+    const pc = $('#pc'); if (pc) pc.addEventListener('click', () => { EDIT = null; render(LAST, true); });
+    const ps = $('#ps'); if (ps) ps.addEventListener('click', () => {
+      const v = LAST[EDIT.i], rows = EDIT.rows.filter(r => (r.title || '').trim() || (r.composer || '').trim());
+      busy(ps, true);
+      api('updateMyPieces', Object.assign({}, Q, { pid: v.id, round: EDIT.k, pieces: rows }))
+        .then(nv => { LAST[EDIT.i] = nv; EDIT = null; render(LAST, true); toast('곡목을 저장했어요', 'ok'); })
+        .catch(err => { busy(ps, false); toast(err.message, 'bad'); });
+    });
+  }
+
+  /* ---------- 공결공문 신청 ---------- */
+  const ST = { 신청: '', 확인: 'warn', 발급: 'ok', 반려: 'bad', 취소: '' };
+  function reqBlock(v, i) {
+    const list = (v.requests || []).filter(r => r.status !== '취소');
+    if (!v.requestOpen && !list.length) return '';
+    let h = '<hr><div class="round-h"><h3 style="margin:0">공결공문</h3><span class="sp"></span>' + (v.requestOpen && !(RQ && RQ.i === i) ? '<button class="sm" data-rqn="' + i + '">신청하기</button>' : '') + '</div>';
+    h += list.map(r => '<div class="rq"><span class="badge ' + (ST[r.status] || '') + '">' + esc(r.status === '발급' ? '발급 완료' : r.status) + '</span><span><b>' + esc(r.recipient) + '</b>' + (r.attn ? ' (참조 ' + esc(r.attn) + ')' : '') + ' · ' + (r.target === '반주자' ? '반주자 ' + esc(r.accompName) : '본인') + '</span><span class="sp"></span>' +
+      (r.ready ? '<button class="sm pri" data-rqd="' + i + '|' + esc(r.docId) + '">공문 받기 (PDF)</button>' : r.status === '신청' ? '<button class="sm ghost" data-rqc="' + i + '|' + esc(r.reqId) + '">취소</button>' : '') +
+      (r.reply ? '<div class="small muted" style="flex-basis:100%">사무국: ' + esc(r.reply) + '</div>' : '') + '</div>').join('');
+    if (RQ && RQ.i === i) h += '<div class="panel fade" style="margin-top:8px;border:2px solid var(--accent)"><p class="small muted" style="margin:0 0 10px">' + esc(INFO.gonggyeolNote || '') + '</p>' +
+      '<div class="seg" style="margin-bottom:10px"><label><input type="radio" name="rqt" value="본인" checked>참가자 본인</label><label><input type="radio" name="rqt" value="반주자">반주자</label></div>' +
+      '<div class="grid g2" style="gap:10px"><div id="rqab" hidden><label class="f" for="rqa">반주자 이름</label><input id="rqa"></div>' +
+      '<div><label class="f" for="rqr">수신 (공문 받을 곳의 장)</label><input id="rqr" placeholder="예: ○○초등학교장, 제○○보병사단장"></div>' +
+      '<div><label class="f" for="rqx">참조 <span class="muted">(선택)</span></label><input id="rqx" placeholder="예: 담임교사, 본부근무대장"></div>' +
+      '<div style="grid-column:1/-1"><label class="f" for="rqm">사무국에 남길 말 <span class="muted">(선택)</span></label><input id="rqm"></div></div>' +
+      '<p class="small muted" style="margin:8px 0 0">공문에는 내 경연 일정(날짜·부문·예선/본선)이 자동으로 들어갑니다.</p>' +
+      '<div class="row end" style="margin-top:10px"><button type="button" id="rqcan">닫기</button><button type="button" class="pri" id="rqgo">신청</button></div></div>';
+    return h;
+  }
+  /* ---------- 상금 수령 정보 ---------- */
+  const BANKS = ['국민', '신한', '우리', '하나', '농협', '기업', 'SC제일', '씨티', '카카오뱅크', '토스뱅크', '케이뱅크', '새마을금고', '신협', '우체국', '수협', 'iM뱅크', '부산', '경남', '광주', '전북', '제주'];
+  function prizeBlock(v, i) {
+    const z = v.prize; if (!z) return '';
+    const sub = z.submitted, editing = PZ && PZ.i === i;
+    let h = '<hr><div class="round-h"><h3 style="margin:0">상금 수령 정보</h3><span class="badge acc">' + esc(z.award) + '</span></div>' +
+      (z.amount ? '<p style="margin:4px 0">상금 <b>' + Number(z.amount).toLocaleString('ko-KR') + '원</b> <span class="small muted">(기타소득 원천징수 4.4% 후 입금' + (z.amount <= 250000 ? ' — 25만원 이하는 세금 없음' : '') + ')</span></p>' : '') +
+      (z.ceremony ? '<p class="small" style="margin:4px 0">시상식: ' + esc(z.ceremony) + '</p>' : '');
+    if (sub && !editing) h += '<div class="panel" style="margin-top:8px"><b>제출 완료</b> <span class="small muted">' + esc(sub.submittedAt) + '</span><div class="small" style="margin-top:6px">' + esc(sub.holderType === '보호자' ? '보호자(' + sub.relation + ') ' : '본인 ') + esc(sub.holder) + ' · ' + esc(sub.bank) + ' ' + esc(sub.accountMask) +
+      (sub.rrnMask ? ' · 주민번호 ' + esc(sub.rrnMask) : '') + '<br>통장 사본 ' + (sub.hasBank ? '올림' : '<b style="color:var(--bad)">아직</b>') + ' · 주민번호 확인 서류 ' + (sub.hasFamily ? (sub.idCheck === 'norrn' ? '<b style="color:var(--bad)">주민번호가 안 보여요 — 다시 올려 주세요</b>' : '올림') : '<b style="color:var(--bad)">아직</b>') + ' · 시상식 ' + esc(sub.attend || '-') + (sub.attendCount ? ' ' + esc(sub.attendCount) + '명' : '') + '</div>' +
+      (z.open ? '<div class="row end"><button class="sm" data-pze="' + i + '">고치기</button></div>' : '') + '</div>';
+    if (!z.open && !sub) h += '<p class="muted small">입력 기간이 되면 이곳에서 계좌 정보를 입력할 수 있어요.</p>';
+    if (z.open && (!sub || editing)) {
+      const f = (PZ && PZ.i === i && PZ.f) || {};
+      h += '<div class="panel fade" style="margin-top:8px;border:2px solid var(--accent)">' + (z.due ? '<p class="small" style="margin:0 0 8px">입력 마감: <b>' + esc(z.due) + '</b></p>' : '') +
+        '<div class="seg" style="margin-bottom:10px"><label><input type="radio" name="pzt" value="본인" ' + (f.holderType !== '보호자' ? 'checked' : '') + '>입상자 본인 명의 통장</label><label><input type="radio" name="pzt" value="보호자" ' + (f.holderType === '보호자' ? 'checked' : '') + '>보호자 명의 통장</label></div>' +
+        '<p class="small" style="margin:0 0 8px">상금을 보내 드리기 전에 본인과 계좌를 확인하려고 <b>통장 사본</b>과 <b>주민등록번호가 보이는 서류</b>를 꼭 받아요.</p>' +
+        '<div class="upl" style="border:1.5px dashed var(--line);border-radius:12px;padding:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div><b>통장 사본</b> <span class="badge bad">필수</span> ' + (z.files && z.files.bank ? '<span class="badge ok">올림</span>' : '') + '<div class="small muted">은행·계좌번호·예금주가 보이게 — 사진을 올리면 글자를 읽어 채워 드려요</div></div><span class="sp"></span><label class="btn" style="cursor:pointer">사진 찍기·파일 선택<input type="file" data-pzu="bank" accept="image/*,application/pdf" hidden></label></div>' +
+        '<div class="rule" style="border:2px solid var(--bad);border-radius:12px;padding:10px 12px;margin:10px 0 0;font-size:14px;line-height:1.6"><b>주민등록번호 13자리가 모두 보이는 서류만 받아요.</b><br><span id="pzfh">' + famHint(f.holderType) + '</span><br><b style="color:var(--bad)">✕ 여권 · 학생증 · 청소년증 등 주민번호 뒷자리가 없는 신분증은 쓸 수 없어요. 뒷자리를 가리지 마세요.</b></div>' +
+        '<div class="upl" style="margin-top:8px;border:1.5px dashed var(--line);border-radius:12px;padding:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div><b>주민번호 확인 서류</b> <span class="badge bad">필수</span> ' + famBadge(z.files) + '<div class="small muted" id="pzfh2">' + (f.holderType === '보호자' ? '주민등록등본 (입상자와 보호자가 함께 나온 것)' : '주민등록등본 또는 입상자 주민등록증·운전면허증') + '</div></div><span class="sp"></span><label class="btn" style="cursor:pointer">사진 찍기·파일 선택<input type="file" data-pzu="family" accept="image/*,application/pdf" hidden></label></div>' +
+        '<label class="chk"><input type="checkbox" id="pzidr"> 주민등록번호 뒷자리까지 보이는 서류를 올렸습니다</label>' +
+        '<div id="pzocr"></div><div class="grid g2" style="gap:10px;margin-top:10px">' +
+        '<div><label class="f" for="pzb">은행</label><select id="pzb"><option value="">선택</option>' + BANKS.map(b => '<option ' + (f.bank === b ? 'selected' : '') + '>' + b + '</option>').join('') + '<option>기타</option></select></div>' +
+        '<div><label class="f" for="pzh">예금주</label><input id="pzh" value="' + esc(f.holder || (f.holderType === '보호자' ? '' : v.name)) + '"></div>' +
+        '<div id="pzrb" ' + (f.holderType === '보호자' ? '' : 'hidden') + '><label class="f" for="pzr">입상자와의 관계</label><select id="pzr"><option>부</option><option>모</option><option>기타 보호자</option></select></div>' +
+        '<div><label class="f" for="pza">계좌번호</label><input id="pza" inputmode="numeric" value="' + esc(f.account || '') + '" placeholder="' + (sub ? '등록됨 ' + esc(sub.accountMask) + ' — 다시 입력' : '') + '"></div>' +
+        (INFO.collectRrn !== 'N' ? '<div><label class="f" for="pzn">입상자 주민등록번호</label><input id="pzn" inputmode="numeric" autocomplete="off" value="' + esc(f.rrn || '') + '"></div>' : '') +
+        '<div><label class="f" for="pzat">시상식</label><select id="pzat"><option>참석</option><option ' + (f.attend === '불참' ? 'selected' : '') + '>불참</option></select></div>' +
+        '<div><label class="f" for="pzc">참석 인원 (본인 포함)</label><input id="pzc" inputmode="numeric" maxlength="2" value="' + esc(f.attendCount || '') + '"></div>' +
+        '<div style="grid-column:1/-1"><label class="f" for="pzm">상장 받을 주소 <span class="muted">(시상식에 못 오실 때)</span></label><input id="pzm" value="' + esc(f.mailAddress || '') + '"></div></div>' +
+        '<p class="small muted" style="margin:10px 0 0">상금은 입상자 본인의 기타소득으로 신고되어 주민등록번호가 필요합니다(「소득세법」). 계좌번호·주민등록번호는 이 화면에서 암호화되어 저장되고 상금 지급·원천징수 신고에만 쓰며, 지급 후 5년간 보관합니다.</p>' +
+        '<label class="chk"><input type="checkbox" id="pzag"> 위 개인정보 수집·이용에 동의합니다</label>' +
+        '<div class="row end" style="margin-top:10px">' + (sub ? '<button type="button" id="pzcan">취소</button>' : '') + '<button type="button" class="pri" id="pzgo" data-i="' + i + '">제출</button></div></div>';
+    }
+    return h;
+  }
+  function famHint(t) { return t === '보호자' ? '보호자 명의 통장이면 → <b>주민등록등본</b> (입상자와 보호자의 관계, 두 사람의 주민번호 뒷자리까지 보이게)' : '입상자 본인 통장이면 → <b>주민등록등본</b> 또는 입상자의 <b>주민등록증·운전면허증</b>'; }
+  function famBadge(fl) { if (!fl || !fl.family) return ''; return fl.idCheck === 'norrn' ? '<span class="badge bad">주민번호가 안 보여요</span>' : '<span class="badge ok">올림</span>'; }
+  function creds(v) { return Object.assign({}, Q, { pid: v.id, name: Q.name || v.name }); }
+  function bindDocs() {
+    document.querySelectorAll('[data-rqn]').forEach(b => b.addEventListener('click', () => { RQ = { i: +b.dataset.rqn }; render(LAST, true); }));
+    document.querySelectorAll('[data-rqd]').forEach(b => b.addEventListener('click', () => { const [i, id] = b.dataset.rqd.split('|'); busy(b, true); App.myDocDownload(Object.assign(creds(LAST[+i]), { docId: id })).catch(err => toast(err.message, 'bad')).finally(() => busy(b, false)); }));
+    document.querySelectorAll('[data-rqc]').forEach(b => b.addEventListener('click', () => { const [i, id] = b.dataset.rqc.split('|'); api('cancelRequest', Object.assign(creds(LAST[+i]), { reqId: id })).then(rs => { LAST[+i].requests = rs; render(LAST, true); toast('신청을 취소했어요'); }).catch(err => toast(err.message, 'bad')); }));
+    document.querySelectorAll('input[name=rqt]').forEach(r => r.addEventListener('change', () => { $('#rqab').hidden = r.value !== '반주자' || !r.checked; }));
+    const can = $('#rqcan'); if (can) can.addEventListener('click', () => { RQ = null; render(LAST, true); });
+    const go = $('#rqgo'); if (go) go.addEventListener('click', () => {
+      const v = LAST[RQ.i], t = document.querySelector('input[name=rqt]:checked').value; busy(go, true);
+      api('requestDoc', Object.assign(creds(v), { target: t, accompName: $('#rqa').value, recipient: $('#rqr').value, attn: $('#rqx').value, note: $('#rqm').value }))
+        .then(rs => { v.requests = rs; RQ = null; render(LAST, true); toast('신청했어요. 사무국 확인 후 이 화면에서 받을 수 있어요.', 'ok'); })
+        .catch(err => { busy(go, false); toast(err.message, 'bad'); });
+    });
+    // 상금
+    document.querySelectorAll('[data-pze]').forEach(b => b.addEventListener('click', () => { const i = +b.dataset.pze, sub = LAST[i].prize.submitted; PZ = { i, f: { holderType: sub.holderType, holder: sub.holder, bank: sub.bank, attend: sub.attend, attendCount: sub.attendCount, mailAddress: sub.mailAddress } }; render(LAST, true); }));
+    const pc = $('#pzcan'); if (pc) pc.addEventListener('click', () => { PZ = null; render(LAST, true); });
+    document.querySelectorAll('input[name=pzt]').forEach(r => r.addEventListener('change', () => { if (!r.checked) return; const g = r.value === '보호자'; $('#pzrb').hidden = !g; $('#pzfh').innerHTML = famHint(r.value); $('#pzfh2').textContent = g ? '주민등록등본 (입상자와 보호자가 함께 나온 것)' : '주민등록등본 또는 입상자 주민등록증·운전면허증'; }));
+    document.querySelectorAll('[data-pzu]').forEach(inp => inp.addEventListener('change', () => {
+      const f = inp.files[0]; inp.value = ''; if (!f) return;
+      const i = +$('#pzgo').dataset.i, v = LAST[i], kind = inp.dataset.pzu, lb = inp.closest('label'), old = lb.firstChild.textContent; lb.firstChild.textContent = '올리는 중…';
+      App.fileToData(f).then(d => api('gas.upload', Object.assign(creds(v), { who: 'prize', kind, b64: d.b64, mime: d.mime, fileName: d.name, ocr: kind === 'bank' })))
+        .then(r => {
+          lb.firstChild.textContent = '다시 올리기'; toast('올렸어요', 'ok');
+          v.prize.files = v.prize.files || {}; v.prize.files[kind] = true;
+          if (kind === 'family') {
+            v.prize.files.idCheck = r.idCheck || '';
+            lb.parentNode.querySelector('div').innerHTML = '<b>주민번호 확인 서류</b> <span class="badge bad">필수</span> ' + famBadge(v.prize.files) + '<div class="small muted">' + esc($('#pzfh2').textContent) + '</div>';
+            $('#pzocr').innerHTML = r.idCheck === 'norrn' ? '<div class="note bad small" style="margin-top:8px">사진에서 주민등록번호 13자리를 찾지 못했어요. 주민등록등본이나 주민등록증·운전면허증인지, 뒷자리를 가리지 않았는지 확인하고 다시 올려 주세요.</div>' : '';
+            return;
+          }
+          const o = r.ocr || {}, msg = [];
+          if (o.bank) { const sel = $('#pzb'); sel.value = Array.from(sel.options).some(x => x.value === o.bank) ? o.bank : '기타'; msg.push('은행 ' + o.bank); }
+          if (o.account) { $('#pza').value = o.account; msg.push('계좌번호'); }
+          if (o.holder) { $('#pzh').value = o.holder; msg.push('예금주 ' + o.holder); }
+          $('#pzocr').innerHTML = kind === 'bank' ? '<div class="note small" style="margin-top:8px">' + (msg.length ? '사진에서 읽어 채웠어요: ' + esc(msg.join(', ')) + '. 맞는지 꼭 확인해 주세요.' : esc(r.ocrError || '읽은 값이 없어요. 직접 입력해 주세요.')) + '</div>' : '';
+        }).catch(err => { lb.firstChild.textContent = old; toast(err.message, 'bad'); });
+    }));
+    const pg = $('#pzgo'); if (pg) pg.addEventListener('click', () => {
+      const i = +pg.dataset.i, v = LAST[i], ht = document.querySelector('input[name=pzt]:checked').value;
+      const ac = $('#pza').value.replace(/[^\d-]/g, ''), rrEl = $('#pzn'), rr = rrEl ? rrEl.value.trim() : '';
+      const fl = v.prize.files || {};
+      if (!fl.bank) return toast('통장 사본을 올려 주세요', 'bad');
+      if (!fl.family) return toast('주민번호가 보이는 서류(주민등록등본 또는 주민등록증·운전면허증)를 올려 주세요', 'bad');
+      if (!$('#pzidr').checked) return toast('주민번호 뒷자리까지 보이는 서류를 올렸는지 확인 칸에 체크해 주세요', 'bad');
+      if (!$('#pzag').checked) return toast('개인정보 수집·이용에 동의해 주세요', 'bad');
+      if (ac.replace(/\D/g, '').length < 8) return toast('계좌번호를 확인해 주세요', 'bad');
+      if (rrEl && !KCrypto.rrnValid(rr)) return toast('입상자 주민등록번호 13자리를 확인해 주세요', 'bad');
+      busy(pg, true);
+      Promise.all([KCrypto.encrypt(INFO.pubKey, ac), rrEl ? KCrypto.encrypt(INFO.pubKey, KCrypto.rrnFormat(rr)) : null])
+        .then(([ea, er]) => api('submitPrize', Object.assign(creds(v), { holderType: ht, holder: $('#pzh').value, relation: ht === '보호자' ? $('#pzr').value : '본인', bank: $('#pzb').value, accountEnc: ea, accountMask: KCrypto.maskAccount(ac),
+          rrnEnc: er || '', rrnMask: rrEl ? KCrypto.maskRrn(rr) : '', attend: $('#pzat').value, attendCount: $('#pzc').value, mailAddress: $('#pzm').value, agree: true, idRrn: true })))
+        .then(z => { v.prize = z; PZ = null; render(LAST, true); toast('상금 수령 정보를 제출했어요', 'ok'); })
+        .catch(err => { busy(pg, false); toast(err.message, 'bad'); });
+    });
+  }
+  function render(list, keepScroll) {
+    const y = window.scrollY;
+    $('#out').innerHTML = list.map((v, i) => {
+      const rr = v.rounds || {};
+      const rounds = ['R1', 'R2'].filter(k => rr[k]);
+      const printable = rounds.filter(k => rr[k].session);
+      return '<section class="card fade" style="margin-top:16px">' +
+        '<div class="res-h"><h2>' + esc(v.name) + '</h2><span class="muted">' + esc(fmtBirth(v.birth)) + ' · 접수번호 ' + esc(v.id) + '</span></div>' +
+        '<div class="row" style="margin-bottom:6px"><span class="badge acc">' + esc(v.groupLabel) + '</span><span class="muted small">' + esc(v.school) + ' ' + esc(v.grade) + '</span><span class="sp"></span>' +
+        (v.paid ? '<span class="badge ok">입금 확인</span>' : '<span class="badge warn">입금 확인 전</span>') + '</div>' +
+        (!v.paid ? '<div class="note warn small">아직 참가비 입금이 확인되지 않았어요. 입금하셨다면 사무국으로 연락해 주세요.</div>' : '') +
+        (rounds.length ? rounds.map(k => '<hr><div class="round-h"><h3 style="margin:0">' + esc(rr[k].name) + '</h3>' + (k === 'R2' ? '<span class="badge ok">본선 진출</span>' : '') + '</div>' + schedBlock(rr[k]) + songsBlock(v, k, i) + resultBlock(rr[k])).join('') :
+          '<hr><p class="muted">아직 조편성 전이에요. 일정이 공지되면 이 화면에서 바로 확인할 수 있어요.</p>' + songsBlock(v, 'R1', i)) +
+        (!rr.R2 && v.pieceEdit && v.pieceEdit.R2 ? '<hr><div class="round-h"><h3 style="margin:0">' + esc(RN('R2')) + ' 준비</h3><span class="badge ok">본선 진출</span></div><p class="small muted" style="margin:0">본선 일정은 공지 후 이 화면에 표시돼요.</p>' + songsBlock(v, 'R2', i) : '') +
+        (printable.length ? '<hr><div class="row">' + printable.map(k => '<button class="pri" data-print="' + i + '|' + k + '">' + esc(rr[k].name) + ' 접수증 출력</button>').join('') +
+          '<span class="small muted">출력해서 경연 당일 가져오세요. 추첨 후 경연순번을 적어 둡니다.</span></div>' : '') +
+        reqBlock(v, i) + prizeBlock(v, i) +
+        '</section>';
+    }).join('') + '<div class="row" style="margin-top:16px"><button class="ghost" id="again">다른 참가자 조회</button></div>';
+    document.querySelectorAll('[data-print]').forEach(b => b.addEventListener('click', () => {
+      const [i, k] = b.dataset.print.split('|');
+      App.printHTML('<div class="pr">' + App.receiptHTML(INFO, LAST[+i], k) + '</div>');
+    }));
+    $('#again').addEventListener('click', () => { $('#out').innerHTML = ''; $('#f').reset(); LAST = []; Q = null; EDIT = null; window.scrollTo(0, 0); $('#nm').focus(); });
+    bindEdit(); bindDocs();
+    if (keepScroll) window.scrollTo(0, y); else $('#out').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+</script>
+</body>
+</html>

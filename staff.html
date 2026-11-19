@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>심사위원·진행요원 정보 입력</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .step { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
+  .step b { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 14px; flex: none; }
+  .step.done b { background: #2f7d4f; }
+  .step h2 { margin: 0; font-size: 19px; }
+  .upl { border: 1.5px dashed var(--line); border-radius: 12px; padding: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .upl .sp { flex: 1; }
+  .sig-wrap { border: 1.5px solid var(--line); border-radius: 12px; background: #fff; touch-action: none; position: relative; }
+  .sig-wrap canvas { width: 100%; height: 180px; display: block; border-radius: 12px; cursor: crosshair; }
+  .sig-wrap span { position: absolute; left: 14px; bottom: 10px; color: #b9b1b5; font-size: 13px; pointer-events: none; }
+  .agree { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+  .agree details summary { cursor: pointer; font-weight: 700; }
+  .agree ol { margin: 8px 0 0; padding-left: 20px; font-size: 14px; line-height: 1.7; }
+  .agree table { font-size: 13px; margin-top: 8px; }
+  .chk { display: flex; gap: 10px; align-items: flex-start; font-weight: 700; margin-top: 10px; }
+  .chk input { width: 22px; height: 22px; min-height: 0; flex: none; margin-top: 1px; }
+  .ocr { background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-top: 10px; }
+  .ocr.bad { background: var(--bad-soft); color: var(--bad); font-weight: 700; }
+  .rule { border: 2px solid var(--bad); border-radius: 12px; padding: 12px 14px; margin: 10px 0; font-size: 14px; line-height: 1.65; }
+  .rule b.no { color: var(--bad); }
+  .wk td, .wk th { font-size: 14px; text-align: center; }
+  .wk th { position: static; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap narrow">
+    <p class="small" id="org" style="margin-bottom:6px;opacity:.8">경향신문사</p>
+    <h1 id="ttl">정보 입력</h1>
+    <p id="intro">사무국에서 보내 드린 링크로 들어오셨어요. 위촉·계약과 지급에 필요한 정보만 받으며, 주민등록번호와 계좌번호는 이 화면에서 암호화되어 저장됩니다.</p>
+  </div>
+</header>
+<main class="wrap narrow lift" style="padding-bottom:60px">
+  <div id="out"></div>
+</main>
+<script src="config.js"></script>
+<script src="core.js"></script>
+<script src="store-local.js"></script>
+<script src="lib/jszip.min.js"></script>
+<script src="timetable.js"></script>
+<script src="forms.js"></script>
+<script src="docfill.js"></script>
+<script src="crypto.js"></script>
+<script src="app.js"></script>
+<script>
+{
+  const { $, $$, esc, api, toast, busy } = App;
+  App.demoBar();
+  const T = new URLSearchParams(location.search).get('t') || '';
+  let ME = null, PH4 = '', SIG = { dirty: false };
+  const out = $('#out');
+  const BANKS = ['국민', '신한', '우리', '하나', '농협', '기업', 'SC제일', '씨티', '카카오뱅크', '토스뱅크', '케이뱅크', '새마을금고', '신협', '우체국', '수협', 'iM뱅크', '부산', '경남', '광주', '전북', '제주', '산업'];
+  const WD = ['일', '월', '화', '수', '목', '금', '토'];
+  const won = n => Math.round(+n || 0).toLocaleString('ko-KR');
+  const dlabel = d => { const m = /(\d{4})-(\d{2})-(\d{2})/.exec(d); if (!m) return d; const x = new Date(+m[1], +m[2] - 1, +m[3]); return (+m[2]) + '월 ' + (+m[3]) + '일(' + WD[x.getDay()] + ')'; };
+  const hm = m => (Math.floor(m / 60) ? Math.floor(m / 60) + '시간' : '') + (m % 60 ? ' ' + (m % 60) + '분' : '');
+
+  if (!T) out.innerHTML = '<div class="note bad">링크 주소가 올바르지 않아요. 사무국에서 받은 주소를 그대로 열어 주세요.</div>';
+  else gate();
+
+  function gate(msg) {
+    out.innerHTML = '<form class="card fade" id="g"><h2>본인 확인</h2><p class="muted small">사무국에 알려 주신 휴대폰 번호의 뒷 4자리를 넣어 주세요.</p>' +
+      '<div class="field"><label class="f" for="p4">휴대폰 뒷 4자리</label><input id="p4" inputmode="numeric" maxlength="4" autocomplete="off" required></div>' +
+      (msg ? '<div class="note bad small">' + esc(msg) + '</div>' : '') + '<button class="pri big" style="width:100%">확인</button></form>';
+    $('#g').addEventListener('submit', e => {
+      e.preventDefault(); PH4 = $('#p4').value.trim(); const b = $('button', e.target); busy(b, true);
+      api('staffSelf', { t: T, phone4: PH4 }).then(v => { ME = v; render(); }).catch(err => { busy(b, false); gate(err.message); });
+    });
+  }
+
+  function render() {
+    const v = ME, judge = v.kind === 'judge', C = v.cfg || {};
+    App.applyTheme(C.themeColor);
+    $('#ttl').textContent = (C.title || '') + ' ' + (judge ? '심사위원' : '진행요원') + ' 정보 입력';
+    document.title = (judge ? '심사위원' : '진행요원') + ' 정보 입력';
+    const rrnOn = C.collectRrn !== 'N', idOn = C.collectIdCopy !== 'N';
+    const done = !!v.submittedAt;
+    let h = '';
+    if (done) h += '<div class="note ok" style="margin-bottom:14px"><b>제출이 끝났어요.</b> (' + esc(v.submittedAt) + ') 고칠 내용이 있으면 아래에서 바꾸고 다시 제출해 주세요.</div>';
+    // 1. 기본 정보
+    h += '<section class="card fade"><div class="step ' + (v.address ? 'done' : '') + '"><b>1</b><h2>기본 정보</h2></div><div class="grid g2" style="gap:12px">' +
+      fld('nm', '이름', v.name, 'readonly') + (judge ? fld('aff', '소속', v.affiliation) + fld('tit', '직함 (예: 교수)', v.title) : fld('bd', '생년월일 (예: 20010513)', v.birth, 'inputmode="numeric" maxlength="8"')) +
+      fld('ph', '휴대폰', v.phone, 'inputmode="tel"') + fld('em', '이메일', v.email, 'type="email"') +
+      '<div style="grid-column:1/-1">' + fld('ad', '주소 (도로명 주소와 상세 주소)', v.address) + '</div></div></section>';
+    // 2. 서류
+    h += '<section class="card fade"><div class="step ' + ((v.hasBank && (!idOn || v.hasId)) ? 'done' : '') + '"><b>2</b><h2>서류 사진 올리기 <span class="badge bad">필수</span></h2></div>' +
+      '<p class="small muted" style="margin-top:0">' + (judge ? '심사비' : '급여') + '를 보내 드리기 전에 본인과 계좌를 확인하려고 받아요. 휴대폰으로 찍어 올리면 글자를 읽어 아래 칸을 채워 드리니, 읽은 값은 꼭 확인해 주세요. 파일은 사무국 담당자만 볼 수 있는 곳에 보관되고 정산이 끝나면 지웁니다.</p>' +
+      (idOn ? '<div class="rule"><b>신분증은 주민등록번호 13자리가 모두 보이는 것만 받아요.</b><br>○ 주민등록증 · 운전면허증 (외국 국적이면 외국인등록증)<br><b class="no">✕ 여권 · 학생증 · 사원증 · 공무원증 등 주민번호 뒷자리가 없는 신분증은 쓸 수 없어요.</b><br>✕ 주민번호 뒷자리를 가리거나 지우지 마세요.</div>' +
+        uplBox('id', '신분증 사본', '주민등록증 또는 운전면허증 앞면 — 주민번호 13자리가 보이게', v.hasId, idBadge(v)) : '') +
+      uplBox('bank', '통장 사본', '본인 명의 통장 — 은행명·계좌번호·예금주가 보이게', v.hasBank) + '<div id="ocrbox"></div>' +
+      (idOn ? '<label class="chk"><input type="checkbox" id="idr" ' + (v.submittedAt ? 'checked' : '') + '> 주민등록번호 13자리가 모두 보이는 신분증(주민등록증·운전면허증)을 올렸습니다</label>' : '') + '</section>';
+    // 3. 지급 정보
+    h += '<section class="card fade"><div class="step ' + (v.accountMask && (!rrnOn || v.rrnMask) ? 'done' : '') + '"><b>3</b><h2>' + (judge ? '심사비' : '급여') + ' 받을 계좌</h2></div><div class="grid g2" style="gap:12px">' +
+      '<div><label class="f" for="bk">은행</label><select id="bk"><option value="">선택</option>' + BANKS.map(b => '<option ' + (v.bank === b ? 'selected' : '') + '>' + b + '</option>').join('') + '<option value="기타" ' + (v.bank && BANKS.indexOf(v.bank) < 0 ? 'selected' : '') + '>기타</option></select></div>' +
+      fld('ho', '예금주', v.holder || v.name) +
+      '<div>' + fld('ac', '계좌번호', '', 'inputmode="numeric" placeholder="' + (v.accountMask ? '등록됨 ' + esc(v.accountMask) + ' (바꿀 때만 입력)' : '- 없이 숫자만') + '"') + '</div>' +
+      (rrnOn ? '<div>' + fld('rr', '주민등록번호', '', 'inputmode="numeric" autocomplete="off" placeholder="' + (v.rrnMask ? '등록됨 ' + esc(v.rrnMask) + ' (바꿀 때만 입력)' : '13자리') + '"') + '</div>' : '') +
+      '</div><p class="small muted" style="margin:10px 0 0">' + (rrnOn ? '주민등록번호는 「소득세법」에 따른 원천징수와 지급명세서 제출에만 씁니다. ' : '') + '두 번호는 이 화면에서 암호화되어 저장되고, 관리자 키 비밀번호를 아는 담당자만 정산할 때 풀 수 있어요.</p></section>';
+    // 4. 동의·서약·계약
+    h += '<section class="card fade"><div class="step ' + (v.agreeAt && (judge || (v.pledgeAt && v.contractAt)) ? 'done' : '') + '"><b>4</b><h2>' + (judge ? '동의 및 공정심사 서약' : '근로계약 · 서약') + '</h2></div>' + (judge ? judgeAgree(v) : staffAgree(v)) + '</section>';
+    // 5. 서명
+    h += '<section class="card fade"><div class="step ' + (v.hasSign ? 'done' : '') + '"><b>5</b><h2>서명</h2></div>' +
+      '<p class="small muted" style="margin-top:0">' + (v.hasSign ? '서명이 등록되어 있어요. 바꾸려면 아래에 다시 쓰고 [서명 저장]을 눌러 주세요.' : '손가락이나 마우스로 정자로 서명해 주세요. ' + (judge ? '동의서' : '근로계약서·서약서') + '에 들어갑니다.') + '</p>' +
+      '<div class="sig-wrap"><canvas id="sig" width="900" height="270"></canvas><span id="sigh">여기에 서명</span></div>' +
+      '<div class="row end" style="margin-top:8px"><button type="button" id="sclr">지우기</button><button type="button" class="pri" id="ssv">서명 저장</button></div></section>';
+    // 제출
+    h += '<div class="row" style="margin-top:16px"><button class="big" id="save">임시 저장</button><span class="sp"></span><button class="pri big" id="submit">' + (done ? '다시 제출' : '제출하기') + '</button></div>';
+    if (v.docs && v.docs.length) h += '<section class="card fade" style="margin-top:16px"><h2>받을 수 있는 서류</h2>' + v.docs.map(d => '<div class="row" style="border-top:1px solid var(--line);padding:10px 0"><span>' + esc(d.title) + '</span><span class="sp"></span><button class="sm" data-doc="' + esc(d.docId) + '">PDF 받기</button></div>').join('') + '</section>';
+    h += '<p class="small muted" style="margin-top:16px">문의: ' + esc(C.contact || '') + '</p>';
+    out.innerHTML = h;
+    bind();
+  }
+  function fld(id, label, val, attr) { return '<div><label class="f" for="' + id + '">' + esc(label) + '</label><input id="' + id + '" value="' + esc(val || '') + '" ' + (attr || '') + '></div>'; }
+  function idBadge(v) {
+    if (!v.hasId) return '';
+    if (v.idCheck === 'ok' || v.idCheck === 'admin') return ' <span class="badge ok">주민번호 확인</span>';
+    if (v.idCheck === 'norrn') return ' <span class="badge bad">주민번호가 안 보여요</span>';
+    return '';
+  }
+  function uplBox(kind, title, hint, has, extra) {
+    return '<div class="upl" style="margin-top:10px"><div><b>' + esc(title) + '</b> ' + (has ? '<span class="badge ok">올림</span>' : '<span class="badge warn">아직</span>') + (extra || '') + '<div class="small muted">' + esc(hint) + '</div></div><span class="sp"></span>' +
+      '<label class="btn" style="cursor:pointer">' + (has ? '다시 올리기' : '사진 찍기·파일 선택') + '<input type="file" data-up="' + kind + '" accept="image/*,application/pdf" hidden></label></div>';
+  }
+  function judgeAgree(v) {
+    const J = v.judge || {}, days = (J.days || []);
+    return (days.length ? '<p style="margin:0 0 8px">위촉 일정: <b>' + days.map(dlabel).join(', ') + '</b> (' + days.length + '일)' + (J.fee ? ' · 1일 심사비 ' + won(J.fee) + '원 (기타소득 8.8% 원천징수)' : '') + '</p>' : '') +
+      '<div class="agree"><details open><summary>개인정보 수집·이용 동의</summary><table><thead><tr><th>항목</th><th>목적</th><th>보유 기간</th></tr></thead><tbody>' +
+      '<tr><td>성명·소속·연락처·이메일·주소</td><td>위촉·연락, 위촉확인서 발급</td><td>행사 후 1년</td></tr><tr><td>은행·계좌번호·예금주</td><td>심사비 지급</td><td>지급 후 5년</td></tr>' +
+      '<tr><td>주민등록번호</td><td>소득세법에 따른 원천징수·지급명세서 제출 (법령 근거)</td><td>지급 후 5년</td></tr><tr><td>신분증(주민번호 보이는 것)·통장 사본</td><td>지급 전 본인·계좌 확인</td><td>지급 후 파기</td></tr></tbody></table>' +
+      '<p class="small muted">동의하지 않을 수 있으나, 이 경우 심사비 지급 등 위촉 업무를 진행할 수 없습니다.</p></details>' +
+      '<label class="chk"><input type="checkbox" id="ag1" ' + (v.agreeAt ? 'checked' : '') + '> 개인정보 수집·이용에 동의합니다</label></div>' +
+      '<div class="agree"><details open><summary>공정심사 서약</summary><ol><li>참가자와 사제·친인척 등 이해관계가 있으면 미리 사무국에 알리고 해당 심사에서 빠지겠습니다.</li><li>심사 내용과 결과를 공식 발표 전에 외부에 알리지 않겠습니다.</li><li>정해진 심사 기준에 따라 공정하고 성실하게 심사하겠습니다.</li><li>심사 중 알게 된 참가자의 개인정보를 심사 목적 외에 쓰지 않겠습니다.</li></ol></details>' +
+      '<label class="chk"><input type="checkbox" id="ag2" ' + (v.agreeAt ? 'checked' : '') + '> 위 내용을 지킬 것을 서약합니다</label></div>';
+  }
+  function staffAgree(v) {
+    const c = v.contract || {}, w = v.work || [];
+    const tot = w.reduce((a, x) => a + (x.minutes || 0), 0);
+    return '<div class="agree"><details open><summary>근로계약 내용 (단시간 근로자)</summary>' +
+      '<p style="margin:8px 0">기간 <b>' + (c.period && c.period.length ? dlabel(c.period[0]) + ' ~ ' + dlabel(c.period[1]) : '사무국 확정 전') + '</b> · 시급 <b>' + won(c.wage) + '원</b> · 업무 ' + esc(c.duty || '') + '<br>근무 장소 ' + esc(c.place || '') + ' · 지급일 ' + esc(c.payDay || '') + ' (본인 명의 통장)</p>' +
+      (w.length ? '<table class="wk"><thead><tr><th>근로일</th><th>시업</th><th>종업</th><th>휴게</th><th>근로시간</th></tr></thead><tbody>' + w.map(x => '<tr><td>' + dlabel(x.date) + '</td><td>' + esc(x.start) + '</td><td>' + esc(x.end) + '</td><td>' + (x.rest ? x.rest + '분' : '없음') + '</td><td>' + hm(x.minutes) + '</td></tr>').join('') + '</tbody></table><p class="small" style="text-align:right;margin:4px 0">합계 ' + w.length + '일, ' + hm(tot) + '</p>' : '<p class="note warn small">근무일이 아직 정해지지 않았어요. 사무국이 정하면 다시 안내드려요.</p>') +
+      '<ol><li>근무 시각은 경연 진행에 따라 미리 협의해 바꿀 수 있고, 실제 근로시간에 따라 임금을 받습니다. 정해진 시간을 넘는 근로에는 법정 가산임금을 받습니다.</li><li>1주 15시간 이상 일하고 그 주 근로일을 모두 나오면 주휴수당을 받습니다.</li><li>주휴일·연차유급휴가는 근로기준법에 따르고, 고용·산재·국민연금·건강보험은 관계 법령에 따라 적용합니다.</li><li>근무 중 알게 된 참가자·심사위원 개인정보와 회사 업무 정보는 누설하지 않습니다.</li><li>계약서는 서명 후 이 화면에서 PDF로 받을 수 있습니다(전자문서 교부).</li></ol></details>' +
+      '<label class="chk"><input type="checkbox" id="agc" ' + (v.contractAt ? 'checked' : '') + ' ' + (w.length ? '' : 'disabled') + '> 위 근로조건에 동의하고 근로계약을 맺습니다</label></div>' +
+      '<div class="agree"><details><summary>정보보안 서약</summary><ol><li>허가받지 않은 정보에 접근하지 않겠습니다.</li><li>허가받지 않은 서류를 열람·복사하거나 유출하지 않겠습니다.</li><li>근무 중 알게 된 기밀(참가자·심사위원·관계자 개인정보 등 콩쿠르 관련 일체의 정보)을 외부에 공개하거나 유출하지 않겠습니다.</li></ol><p class="small muted">근무가 끝난 뒤에도 똑같이 적용되며, 위반하면 관계 법규에 따라 제재를 받을 수 있습니다.</p></details>' +
+      '<label class="chk"><input type="checkbox" id="agp" ' + (v.pledgeAt ? 'checked' : '') + '> 정보보안 서약에 동의합니다</label></div>' +
+      '<div class="agree"><details><summary>개인정보 수집·이용 동의</summary><p class="small">성명·생년월일·연락처·주소·계좌(급여 지급, 지급 후 5년), 주민등록번호(근로소득 신고·4대보험 — 법령 근거), 신분증(주민번호 보이는 것)·통장 사본(지급 전 본인·계좌 확인, 지급 후 파기). 동의하지 않으면 근로계약을 진행할 수 없습니다.</p></details>' +
+      '<label class="chk"><input type="checkbox" id="ag1" ' + (v.agreeAt ? 'checked' : '') + '> 개인정보 수집·이용에 동의합니다</label></div>';
+  }
+
+  /* ---------- 동작 ---------- */
+  function bind() {
+    $$('[data-up]').forEach(inp => inp.addEventListener('change', () => { const f = inp.files[0]; inp.value = ''; if (f) upload(inp.dataset.up, f, inp.closest('label')); }));
+    sigPad();
+    $('#save').addEventListener('click', e => submit(false, e.target));
+    $('#submit').addEventListener('click', e => submit(true, e.target));
+    $$('[data-doc]').forEach(b => b.addEventListener('click', () => { busy(b, true); App.myDocDownload({ docId: b.dataset.doc, t: T, phone4: PH4 }).catch(err => toast(err.message, 'bad')).finally(() => busy(b, false)); }));
+  }
+  function upload(kind, file, label) {
+    const lb = label.firstChild; const old = lb.textContent; lb.textContent = '올리는 중…';
+    App.fileToData(file).then(d => api('gas.upload', { who: 'staff', kind, t: T, phone4: PH4, b64: d.b64, mime: d.mime, fileName: d.name, ocr: true }))
+      .then(r => {
+        toast('올렸어요', 'ok');
+        ME[kind === 'id' ? 'hasId' : 'hasBank'] = true;
+        if (kind === 'id') ME.idCheck = r.idCheck || '';
+        const keep = collect(); render(); restore(keep);
+        if (r.ocr) showOcr(kind, r.ocr); else if (r.ocrError) $('#ocrbox').innerHTML = '<div class="ocr">' + esc(r.ocrError) + '</div>';
+      }).catch(err => { lb.textContent = old; toast(err.message, 'bad'); });
+  }
+  function showOcr(kind, o) {
+    const items = [];
+    if (kind === 'id') {
+      if (!o.rrn) {
+        $('#ocrbox').innerHTML = '<div class="ocr bad">사진에서 주민등록번호 13자리를 찾지 못했어요. 주민등록증·운전면허증인지, 주민번호 뒷자리를 가리지 않았는지, 빛 반사 없이 또렷한지 확인하고 다시 올려 주세요. (여권·학생증은 쓸 수 없어요)</div>';
+        return;
+      }
+      if (o.name && o.name !== ME.name) items.push('사진 속 이름(' + esc(o.name) + ')이 등록된 이름과 달라요. 확인해 주세요.');
+      if ($('#rr')) { $('#rr').value = o.rrn; items.push('주민등록번호를 채웠어요'); }
+      if (o.address && !$('#ad').value) { $('#ad').value = o.address; items.push('주소를 채웠어요'); }
+      if (o.birth && $('#bd') && !$('#bd').value) $('#bd').value = (+o.birth.slice(0, 2) > (new Date().getFullYear() % 100) ? '19' : '20') + o.birth;
+    } else {
+      if (o.bank) { const sel = $('#bk'); sel.value = Array.from(sel.options).some(x => x.value === o.bank) ? o.bank : '기타'; items.push('은행: ' + esc(o.bank)); }
+      if (o.account) { $('#ac').value = o.account; items.push('계좌번호를 채웠어요'); }
+      if (o.holder) { $('#ho').value = o.holder; items.push('예금주: ' + esc(o.holder)); }
+      if (o.holder && o.holder !== String(ME.name).replace(/\s/g, '')) items.push('<b style="color:var(--bad)">예금주가 본인 이름과 달라요. 본인 명의 통장만 받을 수 있어요.</b>');
+    }
+    $('#ocrbox').innerHTML = '<div class="ocr"><b>사진에서 읽었어요.</b> ' + (items.length ? items.join(' · ') : '읽은 값이 없어요. 직접 입력해 주세요.') + '<br><span class="small">잘못 읽었을 수 있으니 아래 칸을 꼭 확인해 주세요.</span></div>';
+  }
+  function collect() { const o = {}; ['aff', 'tit', 'bd', 'ph', 'em', 'ad', 'bk', 'ho', 'ac', 'rr'].forEach(id => { const el = $('#' + id); if (el) o[id] = el.value; }); ['ag1', 'ag2', 'agc', 'agp', 'idr'].forEach(id => { const el = $('#' + id); if (el) o[id] = el.checked; }); return o; }
+  function restore(o) { Object.keys(o).forEach(id => { const el = $('#' + id); if (!el) return; if (typeof o[id] === 'boolean') el.checked = o[id]; else el.value = o[id]; }); }
+
+  function sigPad() {
+    const cv = $('#sig'), g = cv.getContext('2d'); let down = false, last = null;
+    g.lineWidth = 5; g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = '#1b1b4a';
+    const pos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * cv.width / r.width, (e.clientY - r.top) * cv.height / r.height]; };
+    cv.addEventListener('pointerdown', e => { down = true; last = pos(e); cv.setPointerCapture(e.pointerId); $('#sigh').style.display = 'none'; });
+    cv.addEventListener('pointermove', e => { if (!down) return; const p = pos(e); g.beginPath(); g.moveTo(last[0], last[1]); g.lineTo(p[0], p[1]); g.stroke(); last = p; SIG.dirty = true; });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => cv.addEventListener(t, () => { down = false; }));
+    $('#sclr').addEventListener('click', () => { g.clearRect(0, 0, cv.width, cv.height); SIG.dirty = false; $('#sigh').style.display = ''; });
+    $('#ssv').addEventListener('click', e => saveSig(e.target));
+  }
+  function trimmedSig() {
+    const cv = $('#sig'), g = cv.getContext('2d'), d = g.getImageData(0, 0, cv.width, cv.height).data;
+    let x0 = cv.width, y0 = cv.height, x1 = 0, y1 = 0;
+    for (let y = 0; y < cv.height; y += 2) for (let x = 0; x < cv.width; x += 2) if (d[(y * cv.width + x) * 4 + 3] > 20) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 <= x0) return null;
+    const pad = 12, w = x1 - x0 + pad * 2, h = y1 - y0 + pad * 2, k = Math.min(1, 480 / w), c = document.createElement('canvas');
+    c.width = Math.round(w * k); c.height = Math.round(h * k);
+    c.getContext('2d').drawImage(cv, x0 - pad, y0 - pad, w, h, 0, 0, c.width, c.height);
+    return c.toDataURL('image/png');
+  }
+  function saveSig(btn) {
+    if (!SIG.dirty) return Promise.resolve(toast('서명을 먼저 써 주세요', 'bad'));
+    const url = trimmedSig(); if (!url) return Promise.resolve(toast('서명을 먼저 써 주세요', 'bad'));
+    if (btn) busy(btn, true);
+    return api('gas.upload', { who: 'staff', kind: 'sign', t: T, phone4: PH4, b64: url.split(',')[1], mime: 'image/png' })
+      .then(() => { ME.hasSign = true; SIG.dirty = false; toast('서명을 저장했어요', 'ok'); const keep = collect(); render(); restore(keep); })
+      .catch(err => { if (btn) busy(btn, false); toast(err.message, 'bad'); });
+  }
+
+  function submit(final, btn) {
+    const v = ME, judge = v.kind === 'judge', C = v.cfg || {}, o = collect();
+    const info = { email: o.em, address: o.ad, phone: o.ph, bank: o.bk, holder: o.ho };
+    if (judge) { info.affiliation = o.aff; info.title = o.tit; } else info.birth = o.bd;
+    const agree = judge ? { privacy: o.ag1 && o.ag2 } : { privacy: o.ag1, pledge: o.agp, contract: o.agc };
+    agree.idRrn = !!o.idr;
+    const idOn = C.collectIdCopy !== 'N';
+    if (final && idOn && !v.hasId) return toast('주민번호가 보이는 신분증 사본을 올려 주세요', 'bad');
+    if (final && !v.hasBank) return toast('통장 사본을 올려 주세요', 'bad');
+    if (final && idOn && !o.idr) return toast('주민번호 13자리가 보이는 신분증을 올렸는지 확인 칸에 체크해 주세요', 'bad');
+    if (final && judge && !(o.ag1 && o.ag2)) return toast('동의와 서약에 모두 체크해 주세요', 'bad');
+    if (final && !judge && !(o.ag1 && o.agp && o.agc)) return toast('근로계약·서약·개인정보 동의에 모두 체크해 주세요', 'bad');
+    const ac = String(o.ac || '').replace(/[^\d-]/g, ''), rr = String(o.rr || '').trim();
+    if (ac && ac.replace(/\D/g, '').length < 8) return toast('계좌번호를 다시 확인해 주세요', 'bad');
+    if (rr && !KCrypto.rrnValid(rr)) return toast('주민등록번호 13자리를 다시 확인해 주세요', 'bad');
+    busy(btn, true);
+    const pre = SIG.dirty ? saveSig(null) : Promise.resolve();
+    const p = { t: T, phone4: PH4, info, agree, final };
+    pre.then(() => Promise.all([ac ? KCrypto.encrypt(C.pubKey, ac) : null, rr ? KCrypto.encrypt(C.pubKey, KCrypto.rrnFormat(rr)) : null]))
+      .then(([ea, er]) => {
+        if (ea) { p.accountEnc = ea; p.accountMask = KCrypto.maskAccount(ac); }
+        if (er) { p.rrnEnc = er; p.rrnMask = KCrypto.maskRrn(rr); }
+        return api('staffSubmit', p);
+      })
+      .then(nv => { ME = nv; PH4 = String(nv.phone || '').replace(/\D/g, '').slice(-4) || PH4; render(); toast(final ? '제출했어요. 고맙습니다!' : '임시 저장했어요', 'ok'); window.scrollTo(0, 0); })
+      .catch(err => { busy(btn, false); toast(err.message, 'bad'); });
+  }
+}
+</script>
+</body>
+</html>
