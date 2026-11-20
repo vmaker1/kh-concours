@@ -106,7 +106,7 @@
 const { $, $$, esc, api, toast, modal, confirmBox, busy, fmtDate, fmtBirth } = App;
 App.demoBar();
 const app = $('#app');
-const TABS_ALL = [['dash', '현황'], ['people', '참가자'], ['pay', '입금대조'], ['plan', '시간표'], ['sched', '조편성'], ['print', '출석부·인쇄'], ['judges', '심사위원'], ['results', '채점결과'], ['notice', '공지'], ['docs', '문서·출력'], ['staff', '인력·지급'], ['settings', '설정']];
+const TABS_ALL = [['dash', '현황'], ['people', '참가자'], ['pay', '입금대조'], ['plan', '시간표'], ['sched', '조편성'], ['print', '출석부·인쇄'], ['judges', '심사위원'], ['results', '채점결과'], ['notice', '공지'], ['docs', '문서·출력'], ['staff', '인력·지급'], ['arch', '지난 회차'], ['settings', '설정']];
 // 가상계좌(기본)면 입금대조 탭은 숨김 — 설정 payMode=match 로 바꾸면 다시 보임
 const TABS_NOW = () => TABS_ALL.filter(t => t[0] !== 'pay' || (D && D.cfg && D.cfg.payMode === 'match'));
 let D = null, TAB = (location.hash || '#dash').slice(1), ROUND = 'R1', RES_GROUP = null, PFILTER = { q: '', g: '', pay: '' };
@@ -169,7 +169,7 @@ function shell() {
     fetchD(true).then(() => { if (ep !== EPOCH) return; shell(); toast('최신 데이터로 불러왔어요'); }).catch(err => { b.disabled = false; b.textContent = '새로고침'; onErr(err); });
   });
   $('#lo').addEventListener('click', () => { EPOCH++; D = null; VER = ''; App.setToken('admin', null); needLogin(); });
-  ({ dash, people, pay, plan: planTab, sched, print: printTab, judges, results, notice: noticeTab, docs: () => ADMX.docs(), staff: () => ADMX.staff(), settings })[TAB]();
+  ({ dash, people, pay, plan: planTab, sched, print: printTab, judges, results, notice: noticeTab, docs: () => ADMX.docs(), staff: () => ADMX.staff(), arch, settings })[TAB]();
 }
 const view = () => $('#view');
 const refresh = () => load();
@@ -180,18 +180,36 @@ window.ADM = { get D() { return D; }, call, load, refresh, view, onErr, rname, G
 // 숫자만 보는 화면. 전년 자료(Config.prevStats)는 전년 신청자 엑셀에서 인원 수만 뽑아 둔 것 — 이름·연락처는 없음
 const nf = n => (+n || 0).toLocaleString('ko-KR');
 function prevStats() { try { return D.cfg.prevStats ? JSON.parse(D.cfg.prevStats) : null; } catch (e) { return null; } }
-function deltaTxt(cur, prev) {
+// 기준·비교 회차: 'live'(올해, 이 시스템 자료) · 's75'(지난 회차 보관함) · 'prev'(예전 '전년 자료' 한 개)
+let DBASE = 'live', DCMP = null;   // DCMP: null = 기준 바로 앞 회차, '' = 비교 안 함
+const liveNo = () => +((/(\d+)\s*회/.exec((D && D.cfg.title) || '') || [])[1] || 0);
+function seasonOpts() {
+  const out = [], ln = liveNo();
+  out.push({ id: 'live', no: ln || 9999, live: true, label: (ln ? ln + '회 ' : '') + '올해 (진행 중)' });
+  (D.seasons || []).map(z => { let st = null; try { st = JSON.parse(z.stats); } catch (e) { } return st ? { id: 's' + z.no, no: +z.no, label: z.label || (z.no + '회'), st, z } : null; })
+    .filter(Boolean).sort((a, b) => b.no - a.no).forEach(x => out.push(x));
+  const pv = prevStats(); if (pv) out.push({ id: 'prev', no: -1, label: (pv.label || '전년') + ' (전년 자료)', st: pv });
+  return out;
+}
+// 기준보다 앞선 회차 중 가장 가까운 것 (없으면 예전 '전년 자료')
+function defaultCmp(O, B) { const c = O.filter(o => !o.live && o.id !== B.id && o.no < B.no && o.no > 0)[0] || O.find(o => o.id === 'prev' && o.id !== B.id); return c ? c.id : ''; }
+function deltaTxt(cur, prev, lab) {
   if (prev == null) return '';
   const d = cur - prev, pc = prev ? Math.round(d / prev * 1000) / 10 : 0;
-  return '전년 ' + nf(prev) + ' · ' + (d > 0 ? '▲' + nf(d) : d < 0 ? '▼' + nf(-d) : '같음') + (prev && d ? ' (' + (d > 0 ? '+' : '') + pc + '%)' : '');
+  return (lab || '전년') + ' ' + nf(prev) + ' · ' + (d > 0 ? '▲' + nf(d) : d < 0 ? '▼' + nf(-d) : '같음') + (prev && d ? ' (' + (d > 0 ? '+' : '') + pc + '%)' : '');
 }
 const GRADE_ORDER = ['초1', '초2', '초3', '초4', '초5', '초6', '초 졸업', '중1', '중2', '중3', '중 졸업', '고1', '고2', '고3', '고 졸업', '대학·일반1', '대학·일반2', '대학·일반3', '대학·일반4', '대학·일반 졸업', '대학·일반'];
 function dash() {
-  const cfg = D.cfg, S = KC.applicantStats(cfg, D.participants), PV = prevStats();
-  const kpi = (label, v, pv, cls, sub) => '<div class="kpi ' + (cls || '') + '"><b>' + nf(v) + '</b><span>' + esc(label) + '</span>' + (sub ? '<small class="kd">' + esc(sub) + '</small>' : '') + (PV && pv != null ? '<small class="kd">' + esc(deltaTxt(v, pv)) + '</small>' : '') + '</div>';
+  const cfg = D.cfg, O = seasonOpts();
+  let BO = O.find(o => o.id === DBASE); if (!BO) { BO = O[0]; DBASE = 'live'; }
+  if (DCMP && !O.some(o => o.id === DCMP && o.id !== BO.id)) DCMP = null;   // 지워진 회차를 고르고 있었으면 자동으로
+  const CID = DCMP === null ? defaultCmp(O, BO) : DCMP;                      // null = 기준 바로 앞 회차(자동), '' = 비교 안 함
+  const CO = CID ? O.find(o => o.id === CID) : null, LIVE = !!BO.live;
+  const S = LIVE ? KC.applicantStats(cfg, D.participants) : BO.st, PV = CO ? CO.st : null;
+  const kpi = (label, v, pv, cls, sub) => '<div class="kpi ' + (cls || '') + '"><b>' + nf(v) + '</b><span>' + esc(label) + '</span>' + (sub ? '<small class="kd">' + esc(sub) + '</small>' : '') + (PV && pv != null ? '<small class="kd">' + esc(deltaTxt(v, pv, yPrev)) + '</small>' : '') + '</div>';
   const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '';
   // 부문 × 구분
-  const keys = D.groupKeys.slice(); Object.keys(S.groups).concat(PV ? Object.keys(PV.groups || {}) : []).forEach(k => { if (!keys.includes(k)) keys.push(k); });
+  const keys = LIVE ? D.groupKeys.slice() : []; Object.keys(S.groups).concat(PV ? Object.keys(PV.groups || {}) : []).forEach(k => { if (!keys.includes(k)) keys.push(k); });
   const gsort = {}; D.groups.forEach(g => { const d = g.groupKey.split('|')[0], v = +g.sort || 999; gsort[d] = Math.min(gsort[d] || 999, v); });
   keys.sort((a, b) => (gsort[a.split('|')[0]] || 999) - (gsort[b.split('|')[0]] || 999) || KC.groupKeyCmp(a, b));
   const divs = []; keys.forEach(k => { const d = k.split('|')[0]; if (!divs.includes(d)) divs.push(d); });
@@ -216,10 +234,11 @@ function dash() {
   const catName = c => c === '대학일반부' ? '대학·일반부' : c;
   const cats = []; keys.forEach(k => { const c = baseCat(k.split('|')[1]); if (c && !cats.includes(c)) cats.push(c); });
   cats.sort((a, b) => KC.groupKeyCmp('x|' + a, 'x|' + b));
-  const offCur = new Set(D.groupKeys.concat(Object.keys(S.groups))), offPrev = new Set(PV ? Object.keys(PV.groups || {}) : []);
+  const offCur = new Set((LIVE ? D.groupKeys : []).concat(Object.keys(S.groups))), offPrev = new Set(PV ? Object.keys(PV.groups || {}) : []);
   const pick = (src, off, dv, c, g) => { let v = 0, has = false; keys.forEach(k => { const [d, cc] = k.split('|'); if (d !== dv || baseCat(cc) !== c || (g && gOf(cc) !== g)) return; if (off.has(k)) has = true; v += ((src || {})[k] || {}).n || 0; }); return has || v ? v : null; };
-  const cy = String(cfg.applyEnd || '').slice(0, 4) || S.year || String(new Date().getFullYear());
-  const yCur = cy + '년', yPrev = PV ? (PV.label || ((PV.year || (+cy - 1)) + '년')) : '';
+  const cy = (LIVE ? String(cfg.applyEnd || '').slice(0, 4) : '') || S.year || String(new Date().getFullYear());
+  const yCur = LIVE ? cy + '년' : BO.label, yPrev = PV ? (CO.label.replace(/ \(전년 자료\)$/, '') || ((PV.year || (+cy - 1)) + '년')) : '';
+  const tagCur = LIVE ? '올해' : '기준', tagPrev = '비교';
   const cell = (v, cls) => '<td class="' + (cls || '') + '">' + (v == null ? '' : v ? nf(v) : '<span class="z">0</span>') + '</td>';
   const dCell = (a, b) => { const d = a - b; return '<td class="b ' + (d > 0 ? 'up' : d < 0 ? 'dn' : '') + '">' + (d > 0 ? '▲' + nf(d) : d < 0 ? '▼' + nf(-d) : '–') + (b && d ? ' <small>(' + (d > 0 ? '+' : '') + Math.round(d / b * 1000) / 10 + '%)</small>' : '') + '</td>'; };
   const colC = cats.map(() => 0), colP = cats.map(() => 0);
@@ -241,7 +260,7 @@ function dash() {
     (PV ? colP.map((v, i) => '<td class="p' + (i ? '' : ' b') + '">' + nf(v) + '</td>').join('') + '<td class="t p">' + nf(tP) + '</td>' + dCell(tC, tP) : '') + '</tr>';
   const catTh = cats.map((c, i) => '<th class="' + (i ? '' : 'b') + '">' + esc(catName(c)) + '</th>').join('') + '<th class="t">계</th>';
   const pivot = '<div class="scroll" style="margin-top:10px"><table class="gtab pv"><thead>' +
-    '<tr class="yr"><th rowspan="2" class="h" style="vertical-align:bottom">부문</th><th colspan="' + (cats.length + 1) + '" class="b">' + esc(yCur) + '<small>올해</small></th>' + (PV ? '<th colspan="' + (cats.length + 1) + '" class="b pr">' + esc(yPrev) + '<small>전년</small></th><th rowspan="2" class="b" style="vertical-align:bottom">증감</th>' : '') + '</tr>' +
+    '<tr class="yr"><th rowspan="2" class="h" style="vertical-align:bottom">부문</th><th colspan="' + (cats.length + 1) + '" class="b">' + esc(yCur) + '<small>' + tagCur + '</small></th>' + (PV ? '<th colspan="' + (cats.length + 1) + '" class="b pr">' + esc(yPrev) + '<small>' + tagPrev + '</small></th><th rowspan="2" class="b" style="vertical-align:bottom">증감</th>' : '') + '</tr>' +
     '<tr>' + catTh + (PV ? catTh : '') + '</tr></thead><tbody>' + pvBody + '</tbody></table></div>';
   const pivotRows = () => {
     const h1 = ['부문'].concat(cats.map(c => yCur + ' ' + catName(c)), [yCur + ' 계']).concat(PV ? cats.map(c => yPrev + ' ' + catName(c)).concat([yPrev + ' 계', '증감']) : []);
@@ -258,7 +277,7 @@ function dash() {
   const e1 = D.entries.filter(e => e.round === 'R1' && live.has(e.pid)), e2 = D.entries.filter(e => e.round === 'R2' && live.has(e.pid));
   const res1 = Object.values(D.results.R1 || {}), done1 = res1.reduce((a, g) => a + g.completed, 0), tot1 = res1.reduce((a, g) => a + g.total, 0);
   const P = D.participants.filter(isActive);
-  const prog = (e1.length || e2.length) ? (() => {
+  const prog = LIVE && (e1.length || e2.length) ? (() => {
     const rows = keys.filter(k => D.groupKeys.includes(k)).map(k => {
       const pk = new Set(P.filter(p => p.groupKey === k).map(p => p.id)), r1 = e1.filter(e => pk.has(e.pid)), r2 = e2.filter(e => pk.has(e.pid));
       return { k, s1: D.sessions.filter(s => s.round === 'R1' && s.groupKey === k).length, r1: r1.length, att: r1.filter(e => e.attend === 'Y').length, pass: r1.filter(e => e.pass === 'Y').length, r2: r2.length };
@@ -274,48 +293,60 @@ function dash() {
   const farSet = new Set(String(cfg.farRegions || '').split(/[,\s]+/).filter(Boolean));
   const regs = Object.keys(Object.assign({}, S.regions, PV ? PV.regions : {})).sort((a, b) => (S.regions[b] || 0) - (S.regions[a] || 0) || ((PV && PV.regions[b]) || 0) - ((PV && PV.regions[a]) || 0));
   const grs = Object.keys(Object.assign({}, S.grades, PV ? PV.grades : {})).sort((a, b) => { const ia = GRADE_ORDER.indexOf(a), ib = GRADE_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || KC.cmpKo(a, b); });
-  const bars = (list, cur, prev, tag) => { const mx = Math.max(1, ...list.map(k => Math.max(cur[k] || 0, (prev && prev[k]) || 0))); return '<div class="bars">' + list.map(k => { const v = cur[k] || 0, pv = prev ? prev[k] || 0 : null, t = tag ? tag(k) : ''; return '<div class="hb' + (t ? ' on' : '') + '" title="' + esc(k + ' ' + v + '명' + (pv != null ? ' · 전년 ' + pv + '명' : '')) + '"><span class="lab">' + esc(k) + (t ? ' <em>' + t + '</em>' : '') + '</span><span class="trk"><i style="width:' + (v / mx * 100) + '%"></i>' + (pv != null ? '<u style="left:' + (pv / mx * 100) + '%"></u>' : '') + '</span><b>' + nf(v) + '</b>' + (pv != null ? '<small>' + nf(pv) + '</small>' : '') + '</div>'; }).join('') + '</div>'; };
-  const PVBOX = (PV ? '<p><b>' + esc(PV.label || '전년') + '</b> · 신청 ' + nf(PV.active) + '명 (환불·취소 ' + nf(PV.cancel) + '명 별도) · 접수 ' + esc(PV.first) + ' ~ ' + esc(PV.last) + '</p><p class="small muted">인원 수만 저장돼 있어요. 이름·연락처·생년월일 같은 개인정보는 남기지 않았어요.</p><div class="row"><label class="btn" style="cursor:pointer">다른 파일로 바꾸기<input type="file" id="pvf" accept=".xlsx,.xls,.csv" hidden></label><button class="ghost danger" id="pvx">지우기</button></div>'
+  const bars = (list, cur, prev, tag) => { const mx = Math.max(1, ...list.map(k => Math.max(cur[k] || 0, (prev && prev[k]) || 0))); return '<div class="bars">' + list.map(k => { const v = cur[k] || 0, pv = prev ? prev[k] || 0 : null, t = tag ? tag(k) : ''; return '<div class="hb' + (t ? ' on' : '') + '" title="' + esc(k + ' ' + v + '명' + (pv != null ? ' · ' + yPrev + ' ' + pv + '명' : '')) + '"><span class="lab">' + esc(k) + (t ? ' <em>' + t + '</em>' : '') + '</span><span class="trk"><i style="width:' + (v / mx * 100) + '%"></i>' + (pv != null ? '<u style="left:' + (pv / mx * 100) + '%"></u>' : '') + '</span><b>' + nf(v) + '</b>' + (pv != null ? '<small>' + nf(pv) + '</small>' : '') + '</div>'; }).join('') + '</div>'; };
+  let PVBOX = (PV ? '<p><b>' + esc(PV.label || '전년') + '</b> · 신청 ' + nf(PV.active) + '명 (환불·취소 ' + nf(PV.cancel) + '명 별도) · 접수 ' + esc(PV.first) + ' ~ ' + esc(PV.last) + '</p><p class="small muted">인원 수만 저장돼 있어요. 이름·연락처·생년월일 같은 개인정보는 남기지 않았어요.</p><div class="row"><label class="btn" style="cursor:pointer">다른 파일로 바꾸기<input type="file" id="pvf" accept=".xlsx,.xls,.csv" hidden></label><button class="ghost danger" id="pvx">지우기</button></div>'
         : '<p>작년 홈페이지 신청자 엑셀(올해와 같은 양식)을 올리면 부문별 인원·지역·학년·접수 추이를 전년과 나란히 보여 줘요.</p><p class="small muted">파일에서 인원 수만 뽑아 저장하고, 이름·연락처 같은 개인정보는 저장하지 않아요.</p><label class="btn pri" style="cursor:pointer">전년 신청자 엑셀 올리기<input type="file" id="pvf" accept=".xlsx,.xls,.csv" hidden></label>');
-  const legendPrev = PV ? '<p class="small muted" style="margin:6px 0 0">막대 = 올해 · 세로 눈금과 오른쪽 작은 숫자 = ' + esc(PV.label || '전년') + '</p>' : '';
-  view().innerHTML =
+  const legendPrev = PV ? '<p class="small muted" style="margin:6px 0 0">막대 = ' + esc(yCur) + ' · 세로 눈금과 오른쪽 작은 숫자 = ' + esc(yPrev) + '</p>' : '';
+  const optH = (sel, skip) => O.filter(o => o.id !== skip).map(o => '<option value="' + o.id + '"' + (o.id === sel ? ' selected' : '') + '>' + esc(o.label) + '</option>').join('');
+  const PICK = '<div class="row" style="gap:8px;margin:0 0 10px;align-items:center"><b>기준</b><select id="dbase" style="width:auto">' + optH(BO.id) + '</select>' +
+    '<b style="margin-left:6px">비교</b><select id="dcmp" style="width:auto"><option value="">비교 안 함</option>' + optH(CID, BO.id) + '</select>' +
+    '<span class="sp"></span><button class="ghost sm" id="goarch">지난 회차 넣기·검색</button></div>' +
+    (LIVE ? '' : '<div class="note small" style="margin:0 0 10px">' + esc(BO.label) + ' 기준으로 보는 중이에요 — 보관된 인원 수로 그린 화면이라 조편성·진행 현황은 없어요.</div>');
+  const SEAS = O.filter(o => !o.live);
+  PVBOX = (SEAS.length ? '<table class="small"><tbody>' + SEAS.map(o => '<tr><td><b>' + esc(o.label) + '</b></td><td class="n">' + nf(o.st.active) + '명</td><td class="muted">' + (o.z ? (+o.z.people ? '명단 보관 ~' + esc(o.z.purgeAt) : '인원 수만') : '인원 수만') + '</td></tr>').join('') + '</tbody></table>' : '<p>지난 회차 신청자 엑셀(73·74·75회 …)을 넣어 두면 여기서 회차를 골라 비교할 수 있어요.</p>') +
+    '<p class="small muted" style="margin-top:8px">이름 명단은 접수 마지막 날로부터 ' + 3 + '년만 보관하고, 그 뒤에는 인원 수만 남아요.</p><div class="row"><button class="pri" id="goarch2">지난 회차 넣기·검색</button>' + (prevStats() ? '<button class="ghost danger" id="pvx">예전 전년 자료 지우기</button>' : '') + '</div>';
+  view().innerHTML = PICK +
     '<div class="grid g4" style="margin-bottom:8px">' +
       kpi('신청 (취소·환불 제외)', S.active, PV && PV.active, 'hl') +
       kpi('입금 확인', S.paid, PV && PV.paid, '', S.active ? '신청의 ' + pct(S.paid, S.active) : '') +
       kpi('입금 대기', S.wait, PV && PV.wait, S.wait ? 'warnk' : '', cfg.payMode === 'match' ? '통장 대조 전' : '가상계좌 미입금') +
       kpi('환불·취소', S.cancel, PV && PV.cancel) +
       kpi('지방 참가자', S.far, PV && PV.far, '', '오후 조 우선 배정 대상') + '</div>' +
-    (S.total ? '' : '<div class="note" style="margin:12px 0">아직 참가자가 없어요. <b>참가자</b> 탭에서 홈페이지 신청자 엑셀을 불러오면 여기 숫자가 채워져요.' + (PV ? '' : ' 아래 <b>전년 자료</b>에 작년 파일을 넣어 두면 올해 접수가 시작될 때 바로 비교돼요.') + '</div>') +
+    (S.total || !LIVE ? '' : '<div class="note" style="margin:12px 0">아직 참가자가 없어요. <b>참가자</b> 탭에서 홈페이지 신청자 엑셀을 불러오면 여기 숫자가 채워져요.' + (PV ? '' : ' 아래 <b>비교 자료</b>에 작년 파일을 넣어 두면 올해 접수가 시작될 때 바로 비교돼요.') + '</div>') +
     '<div class="card" style="margin-top:16px"><div class="row"><h2 style="margin:0">부문별 신청 현황</h2><span class="sp"></span>' + (S.first ? '<span class="small muted">접수 ' + esc(S.first) + ' ~ ' + esc(S.last) + ' · 남 ' + nf(S.male) + ' / 여 ' + nf(S.female) + '</span>' : '') + '</div>' +
-      pivot + '<p class="small muted" style="margin:6px 0 0">신청 = 취소·환불 제외. ' + (PV ? '오른쪽 회색 = ' + esc(yPrev) + ', 증감은 계 기준.' : '전년 자료를 넣으면 오른쪽에 전년 표가 붙어요.') + '</p>' +
+      pivot + '<p class="small muted" style="margin:6px 0 0">신청 = 취소·환불 제외. ' + (PV ? '오른쪽 회색 = ' + esc(yPrev) + ', 증감은 계 기준.' : '위쪽 비교에서 회차를 고르면 오른쪽에 그 회차 표가 붙어요.') + '</p>' +
       '<details style="margin-top:12px"><summary class="small" style="cursor:pointer;font-weight:700">입금·성별·지방까지 자세히</summary>' +
-      '<div class="scroll" style="margin-top:10px"><table class="gtab dtab"><thead><tr><th>부문</th><th>구분</th><th class="n">신청</th><th class="n">입금 확인</th><th class="n">입금 대기</th><th class="n">남</th><th class="n">여</th><th class="n">지방</th>' + (PV ? '<th class="n">' + esc(PV.label || '전년') + '</th><th class="n">증감</th>' : '') + '</tr></thead><tbody>' + body + '</tbody></table></div></details>' +
+      '<div class="scroll" style="margin-top:10px"><table class="gtab dtab"><thead><tr><th>부문</th><th>구분</th><th class="n">신청</th><th class="n">입금 확인</th><th class="n">입금 대기</th><th class="n">남</th><th class="n">여</th><th class="n">지방</th>' + (PV ? '<th class="n">' + esc(yPrev) + '</th><th class="n">증감</th>' : '') + '</tr></thead><tbody>' + body + '</tbody></table></div></details>' +
       '<div class="row end" style="margin-top:12px"><button id="xcnt">현황 엑셀</button></div></div>' +
     '<div class="dgrid">' +
       '<div class="card"><h2>신청 추이 <small class="muted" style="font-weight:500;font-size:14px">누적 · 마감일 기준</small></h2><div id="trend"></div></div>' +
-      '<div class="card"><h2>전년 자료</h2>' + PVBOX + '</div></div>' +
+      '<div class="card"><h2>비교 자료</h2>' + PVBOX + '</div></div>' +
     '<div class="dgrid half">' +
       '<div class="card"><h2>지역</h2>' + (regs.length ? bars(regs, S.regions, PV && PV.regions, k => farSet.has(k) ? '지방' : '') : '<div class="empty">자료 없음</div>') + legendPrev + '</div>' +
       '<div class="card"><h2>학년</h2>' + (grs.length ? bars(grs, S.grades, PV && PV.grades) : '<div class="empty">자료 없음</div>') + legendPrev + '</div>' +
     '</div>' +
     (prog ? '<div class="card" style="margin-top:16px"><h2>진행 현황</h2>' + prog + '</div>' : '');
-  drawTrend($('#trend'), S, PV);
+  drawTrend($('#trend'), S, PV, { live: LIVE, labA: yCur, labB: yPrev });
   $('#xcnt').addEventListener('click', () => {
-    const g = [['부문', '구분', '신청', '입금 확인', '입금 대기', '남', '여', '지방'].concat(PV ? [PV.label || '전년', '증감'] : [])];
+    const g = [['부문', '구분', '신청', '입금 확인', '입금 대기', '남', '여', '지방'].concat(PV ? [yPrev, '증감'] : [])];
     keys.forEach(k => { const G = S.groups[k] || Z, pg = PV ? (PV.groups || {})[k] || Z : null; g.push(k.split('|').concat([G.n, G.paid, G.wait, G.m, G.f, G.far]).concat(pg ? [pg.n, G.n - pg.n] : [])); });
     g.push(['합계', ''].concat([TT.n, TT.paid, TT.wait, TT.m, TT.f, TT.far]).concat(TP ? [TP.n, TT.n - TP.n] : []));
-    const kv = (o, p, ks) => [['구분', '올해'].concat(PV ? [PV.label || '전년'] : [])].concat(ks.map(k => [k, o[k] || 0].concat(PV ? [(p || {})[k] || 0] : [])));
+    const kv = (o, p, ks) => [['구분', yCur].concat(PV ? [yPrev] : [])].concat(ks.map(k => [k, o[k] || 0].concat(PV ? [(p || {})[k] || 0] : [])));
     const days = Object.keys(Object.assign({}, S.daily)).sort();
     App.writeXlsx([{ name: '부문×구분', rows: pivotRows() }, { name: '부문별', rows: g }, { name: '지역', rows: kv(S.regions, PV && PV.regions, regs) }, { name: '학년', rows: kv(S.grades, PV && PV.grades, grs) }, { name: '일자별', rows: [['신청일', '신청', '누적']].concat((() => { let c = 0; return days.map(d => [d, S.daily[d], c += S.daily[d]]); })()) }], '신청현황_' + App.today() + '.xlsx');
   });
   const pvf = $('#pvf'); if (pvf) pvf.addEventListener('change', e => { if (e.target.files[0]) loadPrevFile(e.target.files[0]); e.target.value = ''; });
-  const pvx = $('#pvx'); if (pvx) pvx.addEventListener('click', () => confirmBox('전년 비교 자료를 지울까요?', '지우기', true).then(ok => ok && call('setConfig', { values: { prevStats: '' } }).then(() => { toast('지웠어요', 'ok'); refresh(); }).catch(onErr)));
+  $('#dbase').addEventListener('change', e => { DBASE = e.target.value; DCMP = null; dash(); });
+  $('#dcmp').addEventListener('change', e => { DCMP = e.target.value; dash(); });
+  ['#goarch', '#goarch2'].forEach(id => { const b = $(id); if (b) b.addEventListener('click', () => { TAB = 'arch'; location.hash = TAB; shell(); window.scrollTo(0, 0); }); });
+  const pvx = $('#pvx'); if (pvx) pvx.addEventListener('click', () => confirmBox('예전 방식으로 넣은 전년 비교 자료를 지울까요?', '지우기', true).then(ok => ok && call('setConfig', { values: { prevStats: '' } }).then(() => { toast('지웠어요', 'ok'); refresh(); }).catch(onErr)));
 }
 // 누적 신청 곡선 — x: 마감 D-n (올해는 설정의 접수 마감일, 없으면 마지막 신청일), y: 누적 인원
-function drawTrend(el, S, PV) {
+function drawTrend(el, S, PV, opt) {
+  opt = opt || { live: true };
   const dd = (a, b) => Math.round((Date.parse(a + 'T00:00:00') - Date.parse(b + 'T00:00:00')) / 864e5);
   const series = (st, end) => { if (!st || !st.first) return null; const out = []; let c = 0; Object.keys(st.daily).sort().forEach(d => { c += st.daily[d]; out.push({ x: dd(d, end), d, c, n: st.daily[d] }); }); return out; };
-  const endCur = /^\d{4}-\d{2}-\d{2}$/.test(D.cfg.applyEnd || '') ? D.cfg.applyEnd : S.last;
+  const endCur = opt.live && /^\d{4}-\d{2}-\d{2}$/.test(D.cfg.applyEnd || '') ? D.cfg.applyEnd : S.last;
   const A = series(S, endCur), B = PV ? series(PV, PV.last) : null;
   if (!A && !B) { el.innerHTML = '<div class="empty">신청일 자료가 생기면 그려져요.</div>'; return; }
   const all = (A || []).concat(B || []), x0 = Math.min(...all.map(p => p.x), -7), x1 = Math.max(0, ...all.map(p => p.x)), ymax = Math.max(...all.map(p => p.c), 1);
@@ -325,15 +356,15 @@ function drawTrend(el, S, PV) {
   const raw = ymax / 4, mag = Math.pow(10, Math.floor(Math.log10(raw || 1))), stp = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= raw) || mag * 10, yt = []; for (let v = 0; v <= ymax; v += stp) yt.push(v);
   const xt = []; for (let x = 0; x >= x0; x -= (x1 - x0 > 28 ? 7 : 5)) xt.push(x);
   const curY = (a, x) => { if (!a) return null; let c = 0; a.forEach(p => { if (p.x <= x) c = p.c; }); return a.some(p => p.x <= x) ? c : null; };
-  const labA = 'Y' + (S.year || '올해'), labB = PV ? (PV.label || '전년') : '';
-  el.innerHTML = '<div class="tlg"><span><i class="la"></i>올해' + (S.year ? ' (' + esc(S.year) + ')' : '') + '</span>' + (B ? '<span><i class="lb"></i>' + esc(labB) + '</span>' : '') + '</div>' +
+  const labA = opt.labA || ('올해' + (S.year ? ' (' + S.year + ')' : '')), labB = PV ? (opt.labB || PV.label || '전년') : '';
+  el.innerHTML = '<div class="tlg"><span><i class="la"></i>' + esc(labA) + '</span>' + (B ? '<span><i class="lb"></i>' + esc(labB) + '</span>' : '') + '</div>' +
     '<div class="tw"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="누적 신청 추이">' +
     yt.map(v => '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + sy(v) + '" y2="' + sy(v) + '" class="gl"/><text x="' + (L - 6) + '" y="' + (sy(v) + 4) + '" text-anchor="end" class="ax">' + nf(v) + '</text>').join('') +
     xt.map(x => '<text x="' + sx(x) + '" y="' + (H - 8) + '" text-anchor="middle" class="ax">' + (x === 0 ? '마감' : 'D' + x) + '</text>').join('') +
     (B ? '<path d="' + path(B) + '" class="lnb"/><text x="' + (sx(B[B.length - 1].x) + 6) + '" y="' + (sy(B[B.length - 1].c) + 4) + '" class="dl">' + nf(B[B.length - 1].c) + '</text>' : '') +
     (A ? '<path d="' + path(A) + '" class="lna"/><text x="' + (sx(A[A.length - 1].x) + 6) + '" y="' + (sy(A[A.length - 1].c) + (B && Math.abs(sy(A[A.length - 1].c) - sy(B[B.length - 1].c)) < 14 ? -8 : 4)) + '" class="dl b">' + nf(A[A.length - 1].c) + '</text>' : '') +
     '<line class="xh" x1="0" x2="0" y1="' + T + '" y2="' + (H - Bm) + '" style="display:none"/><rect x="' + L + '" y="' + T + '" width="' + (W - L - R) + '" height="' + (H - T - Bm) + '" fill="transparent" class="hit"/></svg><div class="ttp" style="display:none"></div></div>' +
-    (D.cfg.applyEnd ? '' : '<p class="small muted" style="margin:6px 0 0">설정 › 기본의 <b>접수 마감일</b>을 넣으면 접수 중에도 마감 기준으로 정확히 맞춰 비교돼요.</p>');
+    (D.cfg.applyEnd || !opt.live ? '' : '<p class="small muted" style="margin:6px 0 0">설정 › 기본의 <b>접수 마감일</b>을 넣으면 접수 중에도 마감 기준으로 정확히 맞춰 비교돼요.</p>');
   const svg = $('svg', el), hit = $('.hit', el), xh = $('.xh', el), tip = $('.ttp', el);
   const md = (st, end, x) => { const t = Date.parse(end + 'T00:00:00') + x * 864e5, d = new Date(t); return (d.getMonth() + 1) + '/' + d.getDate(); };
   const move = ev => {
@@ -341,7 +372,7 @@ function drawTrend(el, S, PV) {
     if (x < x0 || x > x1) return;
     const a = curY(A, x), b = curY(B, x), da = A && (A.find(p => p.x === x) || {}).n, db = B && (B.find(p => p.x === x) || {}).n;
     xh.setAttribute('x1', sx(x)); xh.setAttribute('x2', sx(x)); xh.style.display = '';
-    tip.innerHTML = '<b>' + (x === 0 ? '마감일' : '마감 D' + x) + '</b>' + (A ? '<div><i class="la"></i>올해 ' + md(S, endCur, x) + ' · 누적 ' + (a == null ? '–' : nf(a)) + (da ? ' (+' + da + ')' : '') + '</div>' : '') + (B ? '<div><i class="lb"></i>' + esc(labB) + ' ' + md(PV, PV.last, x) + ' · 누적 ' + (b == null ? '–' : nf(b)) + (db ? ' (+' + db + ')' : '') + '</div>' : '');
+    tip.innerHTML = '<b>' + (x === 0 ? '마감일' : '마감 D' + x) + '</b>' + (A ? '<div><i class="la"></i>' + esc(labA) + ' ' + md(S, endCur, x) + ' · 누적 ' + (a == null ? '–' : nf(a)) + (da ? ' (+' + da + ')' : '') + '</div>' : '') + (B ? '<div><i class="lb"></i>' + esc(labB) + ' ' + md(PV, PV.last, x) + ' · 누적 ' + (b == null ? '–' : nf(b)) + (db ? ' (+' + db + ')' : '') + '</div>' : '');
     tip.style.display = ''; const left = (sx(x) / W) * r.width; tip.style.left = Math.min(Math.max(0, left - 90), r.width - 190) + 'px';
   };
   hit.addEventListener('mousemove', move); hit.addEventListener('touchstart', e => move(e.touches[0]), { passive: true });
@@ -1194,6 +1225,104 @@ function accountCard() {
       $('#rgo', m.el).addEventListener('click', e => { busy(e.target, true); call('saveAdminAccount', { id: b.dataset.arp, password: $('#rp', m.el).value }).then(() => { m.close(); toast('바꿨어요 — 새 비밀번호를 직접 전해 주세요', 'ok'); }).catch(err => { busy(e.target, false); onErr(err); }); });
     }));
   }).catch(onErr);
+}
+/* ================= 지난 회차 ================= */
+// 회차별 신청자 파일 → 통계(현황 탭 비교용) + 이름 검색 명단(접수 마지막 날로부터 3년만, 서버가 자동으로 지움)
+let ASRCH = { q: '', no: '', division: '' }, ARES = null;
+const addY3 = d => { const m = /^(\d{4})-(\d{2}-\d{2})/.exec(d || ''); return m ? (+m[1] + 3) + '-' + (m[2] === '02-29' ? '02-28' : m[2]) : ''; };
+function arch() {
+  const SE = (D.seasons || []).slice().sort((a, b) => +b.no - +a.no), ln = liveNo();
+  const stOf = z => { try { return JSON.parse(z.stats) || {}; } catch (e) { return {}; } };
+  const divs = []; SE.forEach(z => Object.keys(stOf(z).divisions || {}).forEach(d => { if (!divs.includes(d)) divs.push(d); }));
+  divs.sort((a, b) => KC.groupKeyCmp(a + '|', b + '|'));
+  const list = SE.length ? '<div class="scroll" style="margin-top:10px"><table class="gtab"><thead><tr><th>회차</th><th>접수 기간</th><th class="n">신청</th><th class="n">취소·환불</th><th>이름 명단</th><th>보관 기한</th><th></th></tr></thead><tbody>' +
+    SE.map(z => { const st = stOf(z), keep = +z.people > 0;
+      return '<tr><td><b>' + esc(z.label || z.no + '회') + '</b>' + (z.source === 'system' ? ' <span class="badge">결과 포함</span>' : '') + '</td><td class="small">' + esc(z.first || '') + (z.last ? ' ~ ' + esc(z.last) : '') + '</td>' +
+        '<td class="n">' + nf(z.active) + '</td><td class="n">' + nf(st.cancel) + '</td>' +
+        '<td>' + (keep ? '<span class="badge ok">' + nf(z.people) + '명 보관</span>' : '<span class="badge">인원 수만</span>') + '</td>' +
+        '<td class="small">' + (keep ? esc(z.purgeAt) + '까지' : z.purgedAt ? esc(String(z.purgedAt).slice(0, 10)) + ' 지움' : '') + '</td>' +
+        '<td style="white-space:nowrap"><button class="sm" data-zv="' + esc(z.no) + '">현황에서 보기</button>' + (keep ? '<button class="sm" data-zp="' + esc(z.no) + '">명단 지우기</button>' : '') + '<button class="sm danger" data-zd="' + esc(z.no) + '">삭제</button></td></tr>'; }).join('') +
+    '</tbody></table></div>' : '<div class="empty" style="margin-top:10px">아직 넣은 회차가 없어요.</div>';
+  view().innerHTML =
+    '<div class="card"><h2>지난 회차</h2><p class="small muted">회차마다 홈페이지 신청자 엑셀(올해 참가자 불러오기와 같은 양식)을 넣으면, <b>현황</b> 탭에서 그 회차를 기준이나 비교로 고를 수 있고 아래에서 이름으로 찾아볼 수 있어요. ' +
+      '<b>이름 명단은 접수 마지막 날로부터 3년만</b> 보관하고(관리자가 로그인할 때 확인해서 자동으로 지움), 그 뒤에는 인원 수만 남아요. 연락처·주소·보호자·곡목은 처음부터 저장하지 않아요.</p>' + list +
+      '<hr><b>회차 넣기</b><div class="row" style="gap:8px;margin-top:8px;align-items:center"><input id="zno" placeholder="회차 (예: 75)" inputmode="numeric" style="width:130px"><label class="btn pri" style="cursor:pointer">신청자 엑셀 고르기<input type="file" id="zf" accept=".xlsx,.xls,.csv" hidden></label>' +
+      (D.participants.length ? '<span class="sp"></span><button id="zcur">올해 자료를 ' + (ln ? ln + '회로 ' : '') + '보관</button>' : '') + '</div>' +
+      (D.participants.length ? '<p class="small muted" style="margin-top:6px">\'올해 자료 보관\'은 대회가 끝난 뒤 눌러 두면 예선 통과·본선 입상까지 함께 남아요. 다시 누르면 그 회차를 새로 덮어써요.</p>' : '') + '</div>' +
+    '<div class="card" style="margin-top:16px"><h2>찾기</h2><div class="row" style="gap:8px">' +
+      '<input id="aq" placeholder="이름 · 학교 · 생년월일" value="' + esc(ASRCH.q) + '" style="width:220px">' +
+      '<select id="ano" style="width:auto"><option value="">모든 회차</option>' + SE.filter(z => +z.people > 0).map(z => '<option value="' + esc(z.no) + '"' + (ASRCH.no === z.no ? ' selected' : '') + '>' + esc(z.label || z.no + '회') + '</option>').join('') + '</select>' +
+      '<select id="adv" style="width:auto"><option value="">모든 부문</option>' + divs.map(d => '<option' + (ASRCH.division === d ? ' selected' : '') + '>' + esc(d) + '</option>').join('') + '</select>' +
+      '<button class="pri" id="ago">찾기</button></div><div id="ares" style="margin-top:12px"></div></div>';
+  renderARes();
+  $('#zf').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) seasonFile(f); });
+  const zc = $('#zcur'); if (zc) zc.addEventListener('click', () => {
+    const m = modal('<h2>올해 자료 보관</h2><p>지금 이 시스템의 참가자 ' + nf(D.participants.length) + '명을 회차로 보관해요. 예선 통과·본선 입상도 함께 남아요.</p><label class="f" for="cno">회차</label><input id="cno" value="' + (ln || '') + '" inputmode="numeric"><label class="f" for="clb">이름</label><input id="clb" placeholder="비우면 \'76회 (2027)\'처럼"><div class="row end" style="margin-top:12px"><button data-close>취소</button><button class="pri" id="cgo">보관</button></div>');
+    $('#cgo', m.el).addEventListener('click', ev => { busy(ev.target, true); call('seasonFromCurrent', { no: $('#cno', m.el).value, label: $('#clb', m.el).value.trim() }).then(r => { m.close(); toast(r.label + ' 보관 — ' + (r.kept ? '명단 ' + nf(r.people) + '명, ' + r.purgeAt + '까지' : '인원 수만'), 'ok'); load(); }).catch(err => { busy(ev.target, false); onErr(err); }); });
+  });
+  $$('[data-zv]').forEach(b => b.addEventListener('click', () => { DBASE = 's' + b.dataset.zv; DCMP = null; TAB = 'dash'; location.hash = TAB; shell(); window.scrollTo(0, 0); }));
+  $$('[data-zp]').forEach(b => b.addEventListener('click', () => confirmBox(b.dataset.zp + '회 이름 명단을 지금 지울까요? 인원 수(통계)는 남아요.', '명단 지우기', true).then(ok => ok && call('seasonPurge', { no: b.dataset.zp }).then(() => { toast('명단을 지웠어요', 'ok'); ARES = null; load(); }).catch(onErr))));
+  $$('[data-zd]').forEach(b => b.addEventListener('click', () => confirmBox(b.dataset.zd + '회를 통째로 삭제할까요? 통계와 명단이 모두 지워져요.', '삭제', true).then(ok => ok && call('seasonDelete', { no: b.dataset.zd }).then(() => { toast('삭제했어요', 'ok'); ARES = null; if (DBASE === 's' + b.dataset.zd) DBASE = 'live'; DCMP = null; load(); }).catch(onErr))));
+  const go = e => {
+    ASRCH = { q: $('#aq').value.trim(), no: $('#ano').value, division: $('#adv').value };
+    if (!ASRCH.q && !ASRCH.no && !ASRCH.division) { toast('이름·학교를 넣거나 회차·부문을 골라 주세요', 'bad'); return; }
+    const btn = $('#ago'); busy(btn, true);
+    call('archiveSearch', ASRCH).then(r => { busy(btn, false); ARES = r; renderARes(); }).catch(err => { busy(btn, false); onErr(err); });
+  };
+  $('#ago').addEventListener('click', go);
+  $('#aq').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+}
+function renderARes() {
+  const el = $('#ares'); if (!el) return;
+  if (!ARES) { el.innerHTML = '<div class="empty">이름이나 학교를 넣고 찾기를 눌러 주세요. 회차나 부문만 골라도 돼요.</div>'; return; }
+  const now = new Set(D.participants.filter(isActive).map(p => p.name + '|' + KC.normBirth(p.birth)));
+  const anyPrior = ARES.rows.some(r => r.prior);
+  el.innerHTML = '<p class="small muted">' + nf(ARES.total) + '명' + (ARES.total > ARES.rows.length ? ' — 앞 ' + nf(ARES.rows.length) + '명만 보여요. 조건을 좁혀 주세요.' : '') + '</p>' +
+    (ARES.rows.length ? '<div class="scroll"><table class="gtab"><thead><tr><th>회차</th><th>이름</th><th>생년월일</th><th>성별</th><th>부문</th><th>구분</th><th>학교</th><th>학년</th><th>지역</th><th>결과</th>' + (anyPrior ? '<th>수상 경력(신청 때 적은 것)</th>' : '') + '<th>나온 회차</th></tr></thead><tbody>' +
+      ARES.rows.map(r => '<tr><td>' + esc(r.no) + '회</td><td><b>' + esc(r.name) + '</b></td><td>' + esc(App.fmtBirth ? App.fmtBirth(r.birth) : r.birth) + '</td><td>' + esc(r.gender) + '</td><td>' + esc(r.division) + '</td><td>' + esc(String(r.category).replace(/\((남|여)\)$/, '').replace(/^대학일반부$/, '대학·일반부')) + '</td>' +
+        '<td>' + esc(r.school) + '</td><td>' + esc(r.grade) + '</td><td>' + esc(r.region) + '</td><td>' + (r.status === '취소' ? '<span class="muted">취소</span>' : esc(r.result || '')) + '</td>' +
+        (anyPrior ? '<td class="small">' + esc(r.prior || '') + '</td>' : '') +
+        '<td>' + (r.seasons || []).map(n => (n === +r.no ? '<b>' + n + '</b>' : n)).join('·') + '회' + (now.has(r.name + '|' + r.birth) ? ' <span class="badge ok">올해 신청</span>' : '') + '</td></tr>').join('') +
+      '</tbody></table></div>' : '');
+}
+function seasonFile(file) {
+  const no = ($('#zno').value || '').replace(/\D/g, '');
+  if (!no) { toast('회차 번호를 먼저 넣어 주세요 (예: 75)', 'bad'); $('#zno').focus(); return; }
+  App.readWorkbook(file).then(sheets => {
+    let sh = sheets[0], hi = -1;
+    for (const x of sheets) { hi = App.findHeaderRow(x.rows, ['이름']); if (hi >= 0) { sh = x; break; } }
+    if (hi < 0) { toast('"이름" 열이 있는 머리글 줄을 찾지 못했어요.', 'bad'); return; }
+    const header = sh.rows[hi].map(x => String(x).trim()), map = App.autoMap(header), pi = header.findIndex(h => /수상/.test(h));
+    const need = ['name', 'birth', 'gender', 'division', 'category', 'school', 'grade', 'payStatus', 'status', 'address', 'address2', 'zip', 'appliedAt'];
+    const rows = sh.rows.slice(hi + 1).filter(r => r.some(c => String(c).trim())).map(r => {
+      const o = {}; need.forEach(f => o[f] = map[f] >= 0 ? String(r[map[f]] == null ? '' : r[map[f]]).trim() : '');
+      o.address = (o.address + ' ' + o.address2).trim(); delete o.address2;
+      const pv = pi >= 0 ? String(r[pi] == null ? '' : r[pi]).trim() : ''; o.prior = /^(없음|무|아니오|N|-|0)?$/i.test(pv) ? '' : pv;
+      return o; }).filter(o => o.division && o.name);
+    if (!rows.length) { toast('지원 부문·이름 열을 찾지 못했어요.', 'bad'); return; }
+    const st = KC.applicantStats(D.cfg, rows), old = (D.seasons || []).find(z => z.no === no);
+    const lastOr = y => st.last || (y ? y + '-12-31' : ''), today = App.today();
+    const keepTxt = y => { const d = addY3(lastOr(y)); return !d ? '' : d > today ? '이름 명단은 <b>' + d + '까지</b> 보관하고 그 뒤 자동으로 지워져요.' : '접수한 지 3년이 지나서 <b>인원 수만</b> 저장해요. (이름 명단은 남기지 않음)'; };
+    const m = modal('<h2>' + no + '회 넣기</h2><p class="small muted">' + esc(file.name) + '</p><table><tbody>' +
+      '<tr><th>접수 기간</th><td>' + (st.first ? esc(st.first) + ' ~ ' + esc(st.last) : '<span class="muted">신청일 열 없음</span>') + '</td></tr>' +
+      '<tr><th>신청</th><td>' + nf(st.active) + '명 (취소·환불 ' + nf(st.cancel) + '명 별도)</td></tr>' +
+      '<tr><th>부문</th><td>' + Object.keys(st.divisions).sort((a, b) => KC.groupKeyCmp(a + '|', b + '|')).map(d => esc(d) + ' ' + st.divisions[d]).join(' · ') + '</td></tr></tbody></table>' +
+      (st.year ? '' : '<label class="f" for="zyr">연도 (신청일이 없어서 필요해요)</label><input id="zyr" inputmode="numeric" placeholder="예: 2024">') +
+      '<label class="f" for="zlb" style="margin-top:10px">이름 (현황 표·그래프에 나와요)</label><input id="zlb" value="' + esc(no + '회' + (st.year ? ' (' + st.year + ')' : '')) + '">' +
+      '<div class="note small" id="zkeep" style="margin-top:10px">' + (keepTxt(st.year) || '연도를 넣으면 보관 기한이 나와요.') + '</div>' +
+      (old ? '<div class="note warn small" style="margin-top:8px">' + esc(old.label) + '이(가) 이미 있어요. 저장하면 이 파일로 바꿔요.</div>' : '') +
+      (liveNo() && +no === liveNo() ? '<div class="note warn small" style="margin-top:8px">지금 진행 중인 회차 번호예요. 대회가 끝난 뒤라면 \'올해 자료 보관\'을 쓰면 결과까지 남아요.</div>' : '') +
+      '<p class="small muted" style="margin-top:8px">저장하는 것: 이름·생년월일·성별·부문·구분·학교·학년·시도·수상 경력 칸. 연락처·주소·보호자·곡목은 저장하지 않아요.</p>' +
+      '<div class="row end"><button data-close>취소</button><button class="pri" id="zgo">저장</button></div>');
+    const yr = $('#zyr', m.el); if (yr) yr.addEventListener('input', () => { $('#zkeep', m.el).innerHTML = keepTxt(yr.value) || '연도를 넣으면 보관 기한이 나와요.'; if (/^\d{4}$/.test(yr.value)) $('#zlb', m.el).value = no + '회 (' + yr.value + ')'; });
+    $('#zgo', m.el).addEventListener('click', e => {
+      const year = yr ? yr.value.trim() : st.year;
+      if (yr && !/^\d{4}$/.test(year)) { toast('연도를 4자리로 넣어 주세요', 'bad'); return; }
+      busy(e.target, true);
+      call('seasonSave', { no, label: $('#zlb', m.el).value.trim(), year, rows }).then(r => { m.close(); toast(r.label + ' — 신청 ' + nf(r.active) + '명' + (r.kept ? ', 명단 ' + r.purgeAt + '까지' : ', 인원 수만'), 'ok'); ARES = null; load(); })
+        .catch(err => { busy(e.target, false); onErr(err); });
+    });
+  }).catch(e => toast('엑셀을 읽지 못했어요: ' + e.message, 'bad'));
 }
 function settings() {
   const C = D.cfg;

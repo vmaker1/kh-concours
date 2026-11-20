@@ -36,12 +36,16 @@ var KC = (function () {
     // 참가자 신청 (공결공문 등)
     Requests: ['reqId', 'pid', 'kind', 'recipient', 'attn', 'target', 'accompName', 'note', 'status', 'reply', 'docId', 'createdAt', 'decidedAt'],
     // 발급대장 — 공문·확인서 번호와 만든 파일
-    Docs: ['docId', 'kind', 'series', 'docNo', 'title', 'target', 'refId', 'fileId', 'pdfId', 'url', 'createdAt', 'status', 'fields']
+    Docs: ['docId', 'kind', 'series', 'docNo', 'title', 'target', 'refId', 'fileId', 'pdfId', 'url', 'createdAt', 'status', 'fields'],
+    // 지난 회차 — 회차마다 한 줄(인원 통계 JSON). 명단은 Archive에, purgeAt(접수 마지막 날 + 3년)이 지나면 지우고 통계만 남김
+    Seasons: ['no', 'label', 'year', 'first', 'last', 'total', 'active', 'people', 'stats', 'purgeAt', 'purgedAt', 'source', 'createdAt'],
+    // 이름 검색용 최소 명단 — 연락처·주소·보호자·곡목은 넣지 않음
+    Archive: ['aid', 'no', 'name', 'birth', 'gender', 'division', 'category', 'groupKey', 'school', 'grade', 'region', 'status', 'prior', 'result']
   };
   var KEYS = {
     Config: 'key', Groups: 'groupKey', Participants: 'id', Sessions: 'sessionId', Entries: 'entryId',
     Judges: 'judgeId', Scores: 'scoreId', Submissions: 'subId', Plan: 'dayId',
-    Staff: 'staffId', Work: 'workId', Prizes: 'pid', Requests: 'reqId', Docs: 'docId'
+    Staff: 'staffId', Work: 'workId', Prizes: 'pid', Requests: 'reqId', Docs: 'docId', Seasons: 'no', Archive: 'aid'
   };
 
   var DEFAULT_CONFIG = {
@@ -904,12 +908,12 @@ var KC = (function () {
       if (!c.adminPassword) fail('관리자 비밀번호가 아직 설정되지 않았습니다. 구글시트 Config에서 adminPassword를 먼저 넣어 주세요.');
       if (pwCheck(c.adminPassword, secret)) {
         if (!/^H1\$/.test(s(c.adminPassword))) db.upsert('Config', [{ key: 'adminPassword', value: pwHash(db, secret) }]);   // 평문 → 해시
-        clearFail(db, 'admin'); db.who = ownerName(c); db.log('admin', 'login', '책임 관리자');
+        clearFail(db, 'admin'); db.who = ownerName(c); db.log('admin', 'login', '책임 관리자'); safePurge(db);
         return { token: issueToken(db, { role: 'admin', owner: true, name: ownerName(c) }), role: 'admin', name: ownerName(c), owner: true };
       }
       var list = adminList(c), me = list.filter(function (a) { return a.on !== 'N' && pwCheck(a.h, secret); })[0];
       if (me) {
-        me.last = db.store.now(); saveAdminList(db, list); clearFail(db, 'admin'); db.who = me.name; db.log('admin', 'login', '');
+        me.last = db.store.now(); saveAdminList(db, list); clearFail(db, 'admin'); db.who = me.name; db.log('admin', 'login', ''); safePurge(db);
         return { token: issueToken(db, { role: 'admin', owner: false, name: me.name, adminId: me.id }), role: 'admin', name: me.name, owner: false };
       }
       if (list.some(function (a) { return a.on === 'N' && pwCheck(a.h, secret); })) fail('사용이 중지된 계정이에요. 책임 관리자에게 문의해 주세요.');
@@ -978,7 +982,7 @@ var KC = (function () {
 
   // ── 관리자 ──
   // 화면이 가진 자료 버전이 지금과 같으면 시트를 읽지 않고 '그대로'만 알려 줌
-  var LOAD_TABLES = ['Config', 'Groups', 'Participants', 'Sessions', 'Entries', 'Judges', 'Scores', 'Submissions', 'Plan', 'Staff', 'Work', 'Prizes', 'Requests', 'Docs'];
+  var LOAD_TABLES = ['Config', 'Groups', 'Participants', 'Sessions', 'Entries', 'Judges', 'Scores', 'Submissions', 'Plan', 'Staff', 'Work', 'Prizes', 'Requests', 'Docs', 'Seasons'];
   def('adminLoad', 'admin', false, function (db, p, auth) {
     var ver = db.store.ver ? db.store.ver() : '';
     if (p.ver && ver && s(p.ver) === ver) return { same: true, ver: ver };
@@ -994,7 +998,8 @@ var KC = (function () {
       cfg: cfg, groupKeys: keys, groups: db.t('Groups'), participants: db.t('Participants'),
       sessions: db.t('Sessions'), entries: db.t('Entries'), judges: db.t('Judges'),
       submissions: db.t('Submissions'), results: results, plan: db.t('Plan'),
-      staff: db.t('Staff'), work: db.t('Work'), prizes: db.t('Prizes'), requests: db.t('Requests'), docs: db.t('Docs'), judgePeople: judgeSummary(db)
+      staff: db.t('Staff'), work: db.t('Work'), prizes: db.t('Prizes'), requests: db.t('Requests'), docs: db.t('Docs'), judgePeople: judgeSummary(db),
+      seasons: db.t('Seasons')   // 통계만 (명단은 archiveSearch로 따로)
     };
   });
 
@@ -1711,6 +1716,104 @@ var KC = (function () {
     o.year = o.last ? o.last.slice(0, 4) : '';
     return o;
   }
+
+  /* ---------- 지난 회차 보관함 ----------
+   * 회차별 신청자 파일(또는 올해 자료)을 넣으면 통계(Seasons.stats)와 이름 검색용 최소 명단(Archive)을 남김.
+   * 명단은 접수 마지막 날로부터 3년이 지나면 지우고(관리자 로그인 때 자동 확인) 인원 수만 남김. */
+  var KEEP_YEARS = 3;
+  function addYears(d, n) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s(d)); if (!m) return '';
+    var md = m[2] + '-' + m[3]; if (md === '02-29') md = '02-28';
+    return (+m[1] + n) + '-' + md;
+  }
+  function todayOf(db) { return s(db.store.now()).slice(0, 10); }
+  function purgeExpired(db) {
+    var t = todayOf(db), due = db.t('Seasons').filter(function (z) { return !s(z.purgedAt) && s(z.purgeAt) && s(z.purgeAt) <= t; });
+    if (!due.length) return [];
+    var nos = due.map(function (z) { return s(z.no); });
+    db.replaceWhere('Archive', function (r) { return nos.indexOf(s(r.no)) >= 0; }, []);
+    db.upsert('Seasons', due.map(function (z) { return { no: z.no, people: '0', purgedAt: db.store.now() }; }));
+    db.log('system', 'archivePurge', nos.join(',') + '회 명단 삭제(보관 ' + KEEP_YEARS + '년 지남)');
+    return nos;
+  }
+  function safePurge(db) { try { purgeExpired(db); } catch (e) { } }
+  function archiveRows(cfg, no, rows) {
+    return rows.map(function (r, i) {
+      var gk = s(r.groupKey) || makeGroupKey(cfg, r.division, r.category, r.gender), pr = gk.split('|');
+      return {
+        aid: no + '-' + (i + 1), no: no, name: s(r.name), birth: normBirth(r.birth), gender: genderShort(r.gender) || s(r.gender),
+        division: pr[0], category: pr[1] || '', groupKey: gk, school: s(r.school), grade: s(r.grade),
+        region: s(r.region) || regionOf(r.address, r.zip) || '', status: isActive(r) ? (isPaid(r) ? '' : '미입금') : '취소',
+        prior: s(r.prior), result: s(r.result)
+      };
+    }).filter(function (r) { return r.name; });
+  }
+  function saveSeason(db, no, label, rows, source, year) {
+    var cfg = db.cfg();
+    no = s(no).replace(/[^0-9]/g, '');
+    if (!no) fail('회차 번호를 넣어 주세요. (예: 75)');
+    if (!rows.length) fail('신청자 자료가 없어요.');
+    var st = applicantStats(cfg, rows);
+    if (!st.year && /^\d{4}$/.test(s(year))) st.year = s(year);
+    st.label = s(label) || (no + '회' + (st.year ? ' (' + st.year + ')' : ''));
+    // 보관 기한 = 접수 마지막 날 + 3년 (신청일이 없으면 그 해 12월 31일 기준)
+    var t = todayOf(db), base = st.last || (st.year ? st.year + '-12-31' : t), purgeAt = addYears(base, KEEP_YEARS), keep = purgeAt > t;
+    var arch = keep ? archiveRows(cfg, no, rows) : [];
+    db.replaceWhere('Archive', function (r) { return s(r.no) === no; }, arch);
+    db.upsert('Seasons', [{ no: no, label: st.label, year: st.year, first: st.first, last: st.last, total: st.total, active: st.active,
+      people: arch.length, stats: JSON.stringify(st), purgeAt: purgeAt, purgedAt: keep ? '' : db.store.now(), source: source, createdAt: db.store.now() }]);
+    db.log('admin', 'seasonSave', no + '회 ' + st.active + '명 · ' + (keep ? '명단 ' + arch.length + '명(~' + purgeAt + ')' : '인원 수만'));
+    safePurge(db);
+    return { no: no, label: st.label, active: st.active, cancel: st.cancel, people: arch.length, purgeAt: purgeAt, kept: keep, first: st.first, last: st.last };
+  }
+  // 신청자 파일에서: rows = [{name, birth, gender, division, category, school, grade, address, zip, payStatus, status, appliedAt, prior}]
+  def('seasonSave', 'admin', true, function (db, p) {
+    return saveSeason(db, p.no, p.label, (p.rows || []).map(function (r) { var o = {}; Object.keys(r).forEach(function (k) { o[k] = s(r[k]); }); return o; }), 'file', p.year);
+  });
+  // 올해(이 시스템에 있는) 자료를 회차로 보관 — 예선 통과·본선 입상까지 함께
+  def('seasonFromCurrent', 'admin', true, function (db, p) {
+    var r1 = {}, aw = {};
+    db.t('Entries').forEach(function (e) { if (e.round === 'R1') r1[e.pid] = (r1[e.pid] === '본선 진출' || e.pass === 'Y') ? '본선 진출' : '예선'; });
+    allGroupKeys(db).forEach(function (k) {
+      if (!entriesOf(db, 'R2', k).length) return;
+      computeGroup(db, 'R2', k).rows.forEach(function (r) { if (r.award) aw[r.pid] = r.award; });
+    });
+    var rows = db.t('Participants').map(function (x) { var o = {}; Object.keys(x).forEach(function (k) { o[k] = x[k]; }); o.result = aw[x.id] ? '본선 ' + aw[x.id] : (r1[x.id] || ''); return o; });
+    return saveSeason(db, p.no, p.label, rows, 'system', p.year);
+  });
+  def('seasonDelete', 'admin', true, function (db, p) {
+    var no = s(p.no);
+    db.replaceWhere('Archive', function (r) { return s(r.no) === no; }, []);
+    db.replaceWhere('Seasons', function (z) { return s(z.no) === no; }, []);
+    db.log('admin', 'seasonDelete', no + '회');
+    return true;
+  });
+  // 기한 전이라도 명단만 지우기 (통계는 남김)
+  def('seasonPurge', 'admin', true, function (db, p) {
+    var no = s(p.no);
+    if (!db.t('Seasons').some(function (z) { return s(z.no) === no; })) fail('그 회차가 없어요.');
+    db.replaceWhere('Archive', function (r) { return s(r.no) === no; }, []);
+    db.upsert('Seasons', [{ no: no, people: '0', purgedAt: db.store.now() }]);
+    db.log('admin', 'seasonPurge', no + '회 명단 삭제');
+    return true;
+  });
+  // 이름·학교·생년월일로 찾기. 같은 사람(이름+생년월일)이 나온 회차도 함께
+  def('archiveSearch', 'admin', false, function (db, p) {
+    var q = s(p.q).replace(/\s/g, ''), no = s(p.no), dv = s(p.division), all = db.t('Archive');
+    if (!q && !no && !dv) return { total: 0, rows: [] };
+    var hist = {};
+    all.forEach(function (r) { var k = s(r.name) + '|' + s(r.birth); (hist[k] = hist[k] || []).push(+r.no); });
+    var hit = all.filter(function (r) {
+      return (!no || s(r.no) === no) && (!dv || r.division === dv) &&
+        (!q || (s(r.name) + '|' + s(r.school) + '|' + s(r.birth)).replace(/\s/g, '').indexOf(q) >= 0);
+    });
+    hit.sort(function (a, b) { return (+b.no - +a.no) || groupKeyCmp(a.groupKey, b.groupKey) || cmpKo(a.name, b.name); });
+    return { total: hit.length, rows: hit.slice(0, 500).map(function (r) {
+      var o = {}; Object.keys(r).forEach(function (k) { o[k] = r[k]; });
+      o.seasons = (hist[s(r.name) + '|' + s(r.birth)] || []).sort(function (a, b) { return a - b; });
+      return o;
+    }) };
+  });
 
   function myRequests(db, pid) {
     var docs = db.t('Docs');
