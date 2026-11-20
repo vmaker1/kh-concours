@@ -40,7 +40,7 @@ var KC = (function () {
     // 지난 회차 — 회차마다 한 줄(인원 통계 JSON). 명단은 Archive에, purgeAt(접수 마지막 날 + 3년)이 지나면 지우고 통계만 남김
     Seasons: ['no', 'label', 'year', 'first', 'last', 'total', 'active', 'people', 'stats', 'purgeAt', 'purgedAt', 'source', 'createdAt'],
     // 이름 검색용 최소 명단 — 연락처·주소·보호자·곡목은 넣지 않음
-    Archive: ['aid', 'no', 'name', 'birth', 'gender', 'division', 'category', 'groupKey', 'school', 'grade', 'region', 'status', 'prior', 'result']
+    Archive: ['aid', 'no', 'name', 'birth', 'gender', 'division', 'category', 'groupKey', 'school', 'grade', 'region', 'status', 'prior', 'result', 'far']
   };
   var KEYS = {
     Config: 'key', Groups: 'groupKey', Participants: 'id', Sessions: 'sessionId', Entries: 'entryId',
@@ -1752,7 +1752,7 @@ var KC = (function () {
         aid: no + '-' + (i + 1), no: no, name: s(r.name), birth: normBirth(r.birth), gender: genderShort(r.gender) || s(r.gender),
         division: pr[0], category: pr[1] || '', groupKey: gk, school: s(r.school), grade: s(r.grade),
         region: s(r.region) || regionOf(r.address, r.zip) || '', status: isActive(r) ? (isPaid(r) ? '' : '미입금') : '취소',
-        prior: s(r.prior), result: s(r.result)
+        prior: s(r.prior), result: s(r.result), far: isFar(cfg, r) ? 'Y' : 'N'
       };
     }).filter(function (r) { return r.name; });
   }
@@ -1805,6 +1805,72 @@ var KC = (function () {
     db.log('admin', 'seasonPurge', no + '회 명단 삭제');
     return true;
   });
+  // 명단 한 줄이 회차 통계에 보탠 몫 (applicantStats와 같은 기준) — 고치거나 뺄 때 통계를 맞추려고
+  function archContrib(cfg, a) {
+    var o = { total: 1, active: 0, paid: 0, wait: 0, cancel: 0, far: 0, male: 0, female: 0, groups: {}, divisions: {}, regions: {}, grades: {} };
+    if (s(a.status) === '취소') { o.cancel = 1; return o; }
+    var gk = s(a.groupKey), G = o.groups[gk] = { n: 1, paid: 0, wait: 0, m: 0, f: 0, far: 0 };
+    o.active = 1; o.divisions[gk.split('|')[0]] = 1;
+    if (s(a.status) === '미입금') { o.wait = 1; G.wait = 1; } else { o.paid = 1; G.paid = 1; }
+    var far = a.far === 'Y' || (a.far !== 'N' && isFar(cfg, { region: a.region }));
+    if (far) { o.far = 1; G.far = 1; }
+    var g = genderShort(a.gender); if (g === '남') { o.male = 1; G.m = 1; } else if (g === '여') { o.female = 1; G.f = 1; }
+    o.regions[s(a.region) || '미상'] = 1; o.grades[gradeKey(a.category, a.grade)] = 1;
+    return o;
+  }
+  function addStats(st, d, sign) {
+    ['total', 'active', 'paid', 'wait', 'cancel', 'far', 'male', 'female'].forEach(function (k) { st[k] = (+st[k] || 0) + sign * (d[k] || 0); });
+    ['divisions', 'regions', 'grades'].forEach(function (m) {
+      st[m] = st[m] || {};
+      Object.keys(d[m]).forEach(function (k) { st[m][k] = (st[m][k] || 0) + sign * d[m][k]; if (st[m][k] <= 0) delete st[m][k]; });
+    });
+    st.groups = st.groups || {};
+    Object.keys(d.groups).forEach(function (k) {
+      var G = st.groups[k] = st.groups[k] || { n: 0, paid: 0, wait: 0, m: 0, f: 0, far: 0 };
+      Object.keys(d.groups[k]).forEach(function (f) { G[f] = (G[f] || 0) + sign * d.groups[k][f]; });
+      if (G.n <= 0) delete st.groups[k];
+    });
+  }
+  function seasonOf(db, no) {
+    var z = db.t('Seasons').filter(function (x) { return s(x.no) === s(no); })[0];
+    if (!z) fail('그 회차가 없어요.');
+    var st = {}; try { st = JSON.parse(z.stats) || {}; } catch (e) { }
+    return { z: z, st: st };
+  }
+  // 지난 회차 명단 한 사람 고치기 — 부문·구분·상태 등이 바뀌면 그 회차 인원 통계도 같이 맞춤
+  def('archiveSave', 'admin', true, function (db, p) {
+    var cfg = db.cfg(), r = p.row || {}, old = db.t('Archive').filter(function (x) { return x.aid === s(p.aid); })[0];
+    if (!old) fail('그 사람을 찾지 못했어요. 새로고침 후 다시 해 주세요.');
+    var v = function (k) { return k in r ? s(r[k]) : s(old[k]); };
+    var gender = genderShort(v('gender')) || v('gender'), cat = v('category').replace(/\((남|여)\)$/, '');
+    if (!v('name')) fail('이름을 넣어 주세요.');
+    if (!v('division')) fail('부문을 넣어 주세요.');
+    var gk = makeGroupKey(cfg, v('division'), cat, gender), st0 = v('status');
+    var nw = {
+      aid: old.aid, no: old.no, name: v('name'), birth: normBirth(v('birth')), gender: gender, division: gk.split('|')[0], category: gk.split('|')[1] || '', groupKey: gk,
+      school: v('school'), grade: v('grade'), region: v('region'), status: /취소|환불/.test(st0) ? '취소' : /미입금|대기/.test(st0) ? '미입금' : '',
+      prior: v('prior'), result: v('result'),
+      far: v('region') === s(old.region) && old.far ? old.far : (isFar(cfg, { region: v('region') }) ? 'Y' : 'N')
+    };
+    var S = seasonOf(db, old.no);
+    addStats(S.st, archContrib(cfg, old), -1); addStats(S.st, archContrib(cfg, nw), 1);
+    db.upsert('Archive', [nw]);
+    db.upsert('Seasons', [{ no: S.z.no, stats: JSON.stringify(S.st), active: S.st.active, total: S.st.total }]);
+    db.log('admin', 'archiveSave', old.no + '회 ' + old.aid);
+    return nw;
+  });
+  // 지난 회차 명단에서 한 사람 빼기. fromStats = 잘못 들어간 사람이라 인원 수에서도 뺌 (아니면 개인정보만 지우고 통계는 그대로)
+  def('archiveRemove', 'admin', true, function (db, p) {
+    var cfg = db.cfg(), old = db.t('Archive').filter(function (x) { return x.aid === s(p.aid); })[0];
+    if (!old) fail('그 사람을 찾지 못했어요. 새로고침 후 다시 해 주세요.');
+    var S = seasonOf(db, old.no);
+    if (p.fromStats) addStats(S.st, archContrib(cfg, old), -1);
+    db.replaceWhere('Archive', function (x) { return x.aid === old.aid; }, []);
+    db.upsert('Seasons', [{ no: S.z.no, stats: JSON.stringify(S.st), active: S.st.active, total: S.st.total, people: Math.max(0, (+S.z.people || 1) - 1) }]);
+    db.log('admin', 'archiveRemove', old.no + '회 ' + old.aid + (p.fromStats ? ' (인원 수에서도)' : ' (명단만)'));
+    return true;
+  });
+
   // 이름·학교·생년월일로 찾기. 같은 사람(이름+생년월일)이 나온 회차도 함께
   def('archiveSearch', 'admin', false, function (db, p) {
     var q = s(p.q).replace(/\s/g, ''), no = s(p.no), dv = s(p.division), all = db.t('Archive');
@@ -1816,7 +1882,8 @@ var KC = (function () {
         (!q || (s(r.name) + '|' + s(r.school) + '|' + s(r.birth)).replace(/\s/g, '').indexOf(q) >= 0);
     });
     hit.sort(function (a, b) { return (+b.no - +a.no) || groupKeyCmp(a.groupKey, b.groupKey) || cmpKo(a.name, b.name); });
-    return { total: hit.length, rows: hit.slice(0, 500).map(function (r) {
+    var lim = no && !q && !dv ? 3000 : 500;   // 회차 명단 통째로 보기
+    return { total: hit.length, rows: hit.slice(0, lim).map(function (r) {
       var o = {}; Object.keys(r).forEach(function (k) { o[k] = r[k]; });
       o.seasons = (hist[s(r.name) + '|' + s(r.birth)] || []).sort(function (a, b) { return a - b; });
       return o;
