@@ -107,17 +107,54 @@ function needLogin() { App.loginView(app, 'admin', '콩쿠르 운영 관리', '�
 const rname = r => r === 'R2' ? (D.cfg.r2Name || '본선') : (D.cfg.r1Name || '예선');
 
 let EPOCH = 0; // 나가기 뒤에 늦게 도착한 응답이 화면을 다시 그리지 않게
-function load() {
-  const ep = EPOCH;
-  return call('adminLoad').then(d => { if (ep !== EPOCH) return; D = d; App.applyTheme(d.cfg.themeColor); document.title = (d.cfg.shortTitle || '콩쿠르') + ' 운영 관리'; shell(); }).catch(onErr);
+// 속도: 받아 둔 자료(D)에 버전을 붙여 두고, 서버 버전이 같으면 다시 받지 않음.
+// 시트를 직접 고친 건 버전이 안 바뀌니 10분이 지나면 한 번은 통째로 다시 받음 ('새로고침' 버튼은 언제나 통째로)
+let VER = '', FULL_AT = 0, CHECK_AT = 0, TOUCHED = false;
+const FRESH_MS = 10 * 60e3;
+function fetchD(force) {
+  const fresh = D && VER && !force && Date.now() - FULL_AT < FRESH_MS;
+  return call('adminLoad', fresh ? { ver: VER } : {}).then(d => {
+    CHECK_AT = Date.now();
+    if (d.same) return false;
+    D = d; VER = d.ver || ''; FULL_AT = Date.now(); return true;
+  });
 }
+function load(force) {
+  const ep = EPOCH;
+  return fetchD(force).then(() => { if (ep !== EPOCH) return; App.applyTheme(D.cfg.themeColor); document.title = (D.cfg.shortTitle || '콩쿠르') + ' 운영 관리'; shell(); }).catch(onErr);
+}
+// 메뉴 이동: 받아 둔 자료로 바로 그리고, 뒤에서 바뀐 게 있는지만 확인
+let PEEKING = false;
+function peek() {
+  if (PEEKING || Date.now() - CHECK_AT < 3e3) return;
+  const ep = EPOCH, tab = TAB, y = window.scrollY;
+  PEEKING = true;
+  fetchD(false).finally(() => { PEEKING = false; }).then(changed => {
+    if (!changed || ep !== EPOCH || TAB !== tab) return;
+    if (!TOUCHED && !document.querySelector('.modal-bg, .modal')) { shell(); window.scrollTo(0, y); }
+    else freshBar();
+  }).catch(() => { });
+}
+function freshBar() {
+  if ($('#fresh')) return;
+  const b = document.createElement('button'); b.id = 'fresh'; b.className = 'pri';
+  b.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:50;box-shadow:0 4px 16px rgba(0,0,0,.18)';
+  b.textContent = '다른 곳에서 바뀐 자료가 있어요 · 반영하기';
+  b.addEventListener('click', () => { b.remove(); shell(); });
+  document.body.appendChild(b);
+}
+app.addEventListener('input', () => { TOUCHED = true; }, true);
 function shell() {
+  TOUCHED = false; const fb = $('#fresh'); if (fb) fb.remove();
   app.innerHTML = '<header class="top"><div class="wrap"><div class="brand">' + esc(D.cfg.title) + '<small>운영 관리' + (D.me && D.me.name ? ' · ' + esc(D.me.name) : '') + '</small></div><span class="sp"></span>' +
     '<a class="btn sm" href="index.html" target="_blank" rel="noopener">참가자 조회</a><a class="btn sm" href="desk.html" target="_blank" rel="noopener">현장</a><a class="btn sm" href="judge.html" target="_blank" rel="noopener">심사위원</a><button class="sm" id="rl">새로고침</button><button class="sm" id="lo">나가기</button></div></header>' +
     '<main class="wrap" style="padding-top:8px;padding-bottom:60px"><nav class="tabs" role="tablist">' + TABS_NOW().map(t => '<button data-t="' + t[0] + '" class="' + (t[0] === TAB ? 'on' : '') + '">' + t[1] + '</button>').join('') + '</nav><div id="view"></div></main>';
-  $$('[data-t]').forEach(b => b.addEventListener('click', () => { TAB = b.dataset.t; location.hash = TAB; JDRAFT = null; load(); }));
-  $('#rl').addEventListener('click', () => load().then(() => toast('최신 데이터로 불러왔어요')));
-  $('#lo').addEventListener('click', () => { EPOCH++; App.setToken('admin', null); needLogin(); });
+  $$('[data-t]').forEach(b => b.addEventListener('click', () => { TAB = b.dataset.t; location.hash = TAB; JDRAFT = null; shell(); window.scrollTo(0, 0); peek(); }));
+  $('#rl').addEventListener('click', e => {
+    const b = e.currentTarget, ep = EPOCH; b.disabled = true; b.textContent = '불러오는 중…';
+    fetchD(true).then(() => { if (ep !== EPOCH) return; shell(); toast('최신 데이터로 불러왔어요'); }).catch(err => { b.disabled = false; b.textContent = '새로고침'; onErr(err); });
+  });
+  $('#lo').addEventListener('click', () => { EPOCH++; D = null; VER = ''; App.setToken('admin', null); needLogin(); });
   ({ dash, people, pay, plan: planTab, sched, print: printTab, judges, results, notice: noticeTab, docs: () => ADMX.docs(), staff: () => ADMX.staff(), settings })[TAB]();
 }
 const view = () => $('#view');

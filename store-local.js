@@ -40,6 +40,8 @@ var KCLocalStore = (function () {
         return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
       },
       uid: function () { return 'xxxxxxxxxxxx'.replace(/x/g, function () { return (Math.random() * 16 | 0).toString(16); }); },
+      ver: function () { if (ls) data = null; var d = load(); if (!d.__ver) { d.__ver = String(Date.now()); save(); } return d.__ver; },
+      bump: function () { var d = load(); d.__ver = String(Date.now()) + String(Math.floor(Math.random() * 1000)); save(); },
       cacheGet: function (k) { var c = load().__cache || {}; return c[k] || null; },
       cachePut: function (k, v) { var d = load(); d.__cache = d.__cache || {}; d.__cache[k] = v; save(); },
       reset: function () { data = {}; Object.keys(KC.SCHEMA).forEach(function (t) { data[t] = []; }); save(); },

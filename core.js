@@ -389,9 +389,14 @@ var KC = (function () {
     var db = {
       store: store,
       t: function (name) { if (!cache[name]) cache[name] = store.all(name); return cache[name]; },
-      upsert: function (name, rows) { store.upsert(name, KEYS[name], rows); delete cache[name]; if (name === 'Config') delete cache.__cfg; },
-      replaceWhere: function (name, pred, rows) { store.replaceWhere(name, pred, rows || []); delete cache[name]; },
-      append: function (name, rows) { store.append(name, rows); delete cache[name]; },
+      upsert: function (name, rows) {
+        store.upsert(name, KEYS[name], rows); delete cache[name]; if (name === 'Config') delete cache.__cfg;
+        // 비밀번호·잠금처럼 화면 자료에 안 들어가는 값만 바뀐 건 '자료가 바뀌었다'로 안 셈
+        if (!(name === 'Config' && rows.every(function (r) { return SECRET_KEYS.indexOf(r.key) >= 0; }))) db.dirty = true;
+      },
+      replaceWhere: function (name, pred, rows) { store.replaceWhere(name, pred, rows || []); delete cache[name]; db.dirty = true; },
+      append: function (name, rows) { store.append(name, rows); delete cache[name]; db.dirty = true; },
+      dirty: false,
       who: '',
       log: function (actor, action, detail) {
         if (actor === 'admin' && db.who) actor = 'admin:' + db.who;   // 관리자마다 이름이 남음
@@ -972,7 +977,12 @@ var KC = (function () {
   def('unlockLogins', 'admin', true, function (db, p, auth) { ownerOnly(auth); db.upsert('Config', [{ key: 'loginLock', value: '' }]); db.log('admin', 'unlockLogins', ''); return true; });
 
   // ── 관리자 ──
+  // 화면이 가진 자료 버전이 지금과 같으면 시트를 읽지 않고 '그대로'만 알려 줌
+  var LOAD_TABLES = ['Config', 'Groups', 'Participants', 'Sessions', 'Entries', 'Judges', 'Scores', 'Submissions', 'Plan', 'Staff', 'Work', 'Prizes', 'Requests', 'Docs'];
   def('adminLoad', 'admin', false, function (db, p, auth) {
+    var ver = db.store.ver ? db.store.ver() : '';
+    if (p.ver && ver && s(p.ver) === ver) return { same: true, ver: ver };
+    if (db.store.prefetch) db.store.prefetch(LOAD_TABLES);   // 구글시트: 탭 14개를 한 번에 읽기
     var keys = allGroupKeys(db);
     var results = { R1: {}, R2: {} };
     ['R1', 'R2'].forEach(function (r) {
@@ -980,7 +990,7 @@ var KC = (function () {
     });
     var cfg = Object.assign({}, db.cfg()); SECRET_KEYS.forEach(function (k) { delete cfg[k]; });
     return {
-      me: { name: auth && auth.name || '', owner: !!(auth && auth.owner) },
+      ver: ver, me: { name: auth && auth.name || '', owner: !!(auth && auth.owner) },
       cfg: cfg, groupKeys: keys, groups: db.t('Groups'), participants: db.t('Participants'),
       sessions: db.t('Sessions'), entries: db.t('Entries'), judges: db.t('Judges'),
       submissions: db.t('Submissions'), results: results, plan: db.t('Plan'),
@@ -1984,7 +1994,11 @@ var KC = (function () {
         if (auth.role === 'admin' && auth.adminId && !adminList(db.cfg()).some(function (x) { return x.id === auth.adminId && x.on !== 'N'; })) return { ok: false, error: '사용이 중지된 관리자예요. 책임 관리자에게 문의해 주세요.', needLogin: true };
         db.who = auth.name || '';
       }
-      var run = function () { db.invalidate(); return a.run(db, req.params || {}, auth); };
+      var run = function () {
+        db.invalidate();
+        try { return a.run(db, req.params || {}, auth); }
+        finally { if (db.dirty && store.bump) store.bump(); }   // 자료 버전 올리기 → 다른 화면이 새로 받아 감
+      };
       var data = a.write ? store.withLock(run) : run();
       return { ok: true, data: data };
     } catch (e) {
