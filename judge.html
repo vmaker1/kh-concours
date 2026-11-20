@@ -66,7 +66,7 @@
       HOME = h;
       const by = {};
       h.sessions.forEach(s => (by[s.date] = by[s.date] || []).push(s));
-      app.innerHTML = '<header class="top"><div class="wrap"><div class="brand">' + esc(h.title) + '<small>' + esc(h.judge.roundName) + ' 심사 · ' + esc(h.judge.name) + ' 심사위원님</small></div><span class="sp"></span><button class="sm" id="lo">나가기</button></div></header>' +
+      app.innerHTML = '<header class="top"><div class="wrap">' + App.brandHTML(h.brand || { name: h.title }, esc(h.judge.roundName) + ' 심사 · ' + esc(h.judge.name) + ' 심사위원님') + '<span class="sp"></span><button class="sm" id="lo">나가기</button></div></header>' +
         '<main class="wrap narrow" style="padding-top:20px;padding-bottom:40px">' +
         (h.sessions.length ? Object.keys(by).sort().map(d => '<h3 style="margin:18px 0 8px">' + esc(fmtDate(d, true)) + (d === App.today() ? ' <span class="badge acc">오늘</span>' : '') + '</h3>' +
           by[d].map(s => {

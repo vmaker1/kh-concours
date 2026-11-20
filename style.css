@@ -28,7 +28,9 @@ p { margin: 0 0 .8em; }
 /* 상단 띠 */
 .top { background: var(--accent); color: var(--accent-ink); }
 .top .wrap { display: flex; align-items: center; gap: 16px; min-height: 64px; flex-wrap: wrap; padding-top: 10px; padding-bottom: 10px; }
-.top .brand { font-weight: 700; font-size: 18px; letter-spacing: -.01em; }
+.top .brand { font-weight: 700; font-size: 18px; letter-spacing: -.01em; display: flex; align-items: center; gap: 10px; }
+.top .brand .blogo { width: 34px; height: 34px; flex: none; background: currentColor; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain; }
+.top .brand img.blogo { background: none; object-fit: contain; }
 .top .brand small { display: block; font-weight: 500; font-size: 13px; opacity: .8; }
 .top .sp { flex: 1; }
 .top button, .top .btn { background: rgba(255,255,255,.14); color: #fff; border-color: rgba(255,255,255,.3); }

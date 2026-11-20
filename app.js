@@ -371,7 +371,17 @@ var App = (function () {
     });
   }
 
+  // 머리글 왼쪽 위: 로고 + 회차 없는 이름. 내장 SVG 로고는 글자색(흰색)으로 칠함, 그 밖의 이미지는 그대로
+  function brandHTML(b, subHTML) {
+    b = b || {};
+    var lg = b.logo ? (/^img\/[\w.-]+\.svg$/.test(b.logo)
+      ? '<span class="blogo" aria-hidden="true" style="-webkit-mask-image:url(' + b.logo + ');mask-image:url(' + b.logo + ')"></span>'
+      : '<img class="blogo img" src="' + esc(b.logo) + '" alt="">') : '';
+    return '<div class="brand">' + lg + '<div class="bt">' + esc(b.name || '') + (subHTML ? '<small>' + subHTML + '</small>' : '') + '</div></div>';
+  }
+
   return {
+    brandHTML: brandHTML,
     DEMO: DEMO, api: api, getToken: getToken, setToken: setToken, resetDemo: resetDemo, store: store,
     $: $, $$: $$, esc: esc, toast: toast, modal: modal, confirmBox: confirmBox, busy: busy,
     fmtDate: fmtDate, fmtBirth: fmtBirth, phone4: phone4, today: today, applyTheme: applyTheme, demoBar: demoBar,

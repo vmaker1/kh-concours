@@ -55,7 +55,7 @@
       const hasToday = list.some(s => s.date === td);
       if (hasToday && !showAll) list = list.filter(s => s.date === td);
       const by = {}; list.forEach(s => (by[s.date] = by[s.date] || []).push(s));
-      app.innerHTML = '<header class="top"><div class="wrap"><div class="brand">' + esc(h.title) + '<small>현장 출석·추첨</small></div><span class="sp"></span><button class="sm" id="lo">나가기</button></div></header>' +
+      app.innerHTML = '<header class="top"><div class="wrap">' + App.brandHTML(h.brand || { name: h.title }, '현장 출석·추첨') + '<span class="sp"></span><button class="sm" id="lo">나가기</button></div></header>' +
         '<main class="wrap narrow" style="padding-top:20px;padding-bottom:40px">' +
         (hasToday ? '<div class="row" style="margin-bottom:8px"><span class="muted small">' + (showAll ? '전체 일정' : '오늘 일정만 보는 중') + '</span><span class="sp"></span><button class="sm" id="all">' + (showAll ? '오늘만 보기' : '전체 일정 보기') + '</button></div>' : '') +
         (list.length ? Object.keys(by).sort().map(d => '<h3 style="margin:16px 0 8px">' + esc(fmtDate(d, true)) + '</h3>' + by[d].map(s =>

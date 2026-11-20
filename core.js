@@ -51,6 +51,7 @@ var KC = (function () {
   var DEFAULT_CONFIG = {
     title: '제76회 이화경향음악콩쿠르',
     shortTitle: '이화경향음악콩쿠르',
+    brandLogo: '',           // 화면 왼쪽 위 로고: 비우면 자동(이화경향 → 이화경향 BI), none = 없음, 이미지 주소도 가능
     organizer: '경향신문사',
     contact: '경향신문 문화사업국 02-3701-1602',
     venue: '이화여자고등학교',
@@ -141,7 +142,14 @@ var KC = (function () {
     driveRoot: '', templates: '', sealFile: '', // 양식 설치 후 자동으로 채워짐
     receiptNote: '경연 당일 이 접수증과 신분증(학생증)을 지참하고, 추첨 시간까지 대기실에 도착해 주세요.'
   };
-  var PUBLIC_CONFIG_KEYS = ['title', 'shortTitle', 'organizer', 'contact', 'venue', 'themeColor', 'r1Name',
+  // 머리글(왼쪽 위) — 회차 없는 이름 + 로고. 회차는 해마다 바뀌니 문서·증명서에만 씀
+  function brandOf(cfg) {
+    var name = s(cfg.shortTitle) || s(cfg.title).replace(/^\s*제?\s*\d+\s*회\s*/, '');
+    var lg = s(cfg.brandLogo);
+    var logo = lg === 'none' ? '' : lg || (/이화경향/.test(s(cfg.title) + s(cfg.shortTitle)) ? 'img/ewha-kh-symbol.svg' : '');
+    return { name: name || s(cfg.title), logo: logo };
+  }
+  var PUBLIC_CONFIG_KEYS = ['title', 'shortTitle', 'brandLogo', 'organizer', 'contact', 'venue', 'themeColor', 'r1Name',
     'r2Name', 'r1Mode', 'r2Mode', 'notice', 'receiptNote', 'publishR1Schedule', 'publishR1Result',
     'publishR2Schedule', 'publishR2Result', 'pubKey', 'gonggyeolOpen', 'gonggyeolNote', 'prizeOpen', 'prizeDue', 'awardCeremony', 'collectRrn', 'collectIdCopy'];
 
@@ -1368,7 +1376,7 @@ var KC = (function () {
     });
     var cfg = db.cfg();
     return {
-      title: cfg.title,
+      title: cfg.title, brand: brandOf(cfg),
       sessions: db.t('Sessions').map(function (x) {
         return { sessionId: x.sessionId, round: x.round, roundName: roundCfg(cfg, x.round).name, groupKey: x.groupKey, groupLabel: groupLabel(x.groupKey), label: x.label, date: x.date, drawTime: x.drawTime, startTime: x.startTime, endTime: x.endTime, venue: x.venue, count: cnt[x.sessionId] || 0, attended: att[x.sessionId] || 0, drawn: drw[x.sessionId] || 0 };
       }).sort(function (a, b) { return cmpKo(a.date + a.startTime, b.date + b.startTime); })
@@ -1462,7 +1470,7 @@ var KC = (function () {
     var ses = db.t('Sessions').filter(function (x) { return judgeCanSee(db, j, x); }).map(function (x) {
       return { sessionId: x.sessionId, groupLabel: groupLabel(x.groupKey), label: x.label, date: x.date, startTime: x.startTime, endTime: x.endTime, venue: x.venue, count: cnt[x.sessionId] || 0, absent: abs[x.sessionId] || 0, mine: mine[x.sessionId] || 0, submittedAt: subs[x.sessionId] || '', locked: x.locked === 'Y' };
     }).sort(function (a, b) { return cmpKo(a.date + a.startTime, b.date + b.startTime); });
-    return { judge: { name: j.name, round: j.round, roundName: rc.name }, mode: rc.mode, max: rc.max, title: cfg.title, sessions: ses };
+    return { judge: { name: j.name, round: j.round, roundName: rc.name }, mode: rc.mode, max: rc.max, title: cfg.title, brand: brandOf(cfg), sessions: ses };
   });
 
   def('judgeSheet', 'judge', false, function (db, p, auth) {
@@ -2122,7 +2130,7 @@ var KC = (function () {
     parseJudgeRates: parseJudgeRates, judgeDayFee: judgeDayFee, parseDayInfo: parseDayInfo, dayInfoStr: dayInfoStr, isWeekend: isWeekend,
     applicantStats: applicantStats, gradeKey: gradeKey, groupKeyCmp: groupKeyCmp, splitSizes: splitSizes,
     checkTimes: checkTimes, checkSessions: checkSessions, parseBreaks: parseBreaks, perSecDefault: perSecDefault,
-    sha256hex: sha256hex, pwCheck: pwCheck,
+    sha256hex: sha256hex, pwCheck: pwCheck, brandOf: brandOf,
     authOf: function (store, tk) { var db = makeDb(store), x = readToken(db, tk); if (x && x.role === 'admin' && x.adminId && !adminList(db.cfg()).some(function (y) { return y.id === x.adminId && y.on !== 'N'; })) return null; return x; }
   };
 })();
