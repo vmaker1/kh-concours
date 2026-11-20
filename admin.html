@@ -31,6 +31,20 @@
   .kpi .kd { display: block; color: var(--sub); font-size: 12.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .kpi.warnk { background: var(--warn-soft); }
   .dtab tr.sub td { background: var(--panel); color: var(--sub); }
+  /* 부문 × 구분 피벗 (올해 | 전년) */
+  .pv th, .pv td { text-align: right; font-variant-numeric: tabular-nums; }
+  .pv th.h, .pv td:first-child { text-align: left; }
+  .pv thead tr:not(.yr) th { text-align: right; }
+  .pv thead tr.yr th { text-align: center; font-size: 14px; color: var(--ink); background: var(--accent-soft); }
+  .pv thead tr.yr th.pr { background: var(--panel); color: var(--sub); }
+  .pv thead tr.yr th small { font-weight: 500; color: var(--sub); margin-left: 4px; }
+  .pv td.t, .pv th.t { font-weight: 800; background: var(--panel); }
+  .pv .b { border-left: 2px solid var(--line); }
+  .pv td.p { color: var(--sub); }
+  .pv tr.gs td { font-size: 12.5px; color: var(--sub); padding-top: 2px; padding-bottom: 2px; }
+  .pv tr.hl td { font-weight: 800; border-top: 2px solid var(--line); }
+  .pv .up { color: var(--ok); } .pv .dn { color: var(--bad); }
+  .pv .z { color: var(--line); }
   .bars { display: grid; gap: 7px; }
   .hb { display: grid; grid-template-columns: 92px 1fr 46px 40px; gap: 8px; align-items: center; font-size: 14px; }
   .hb .lab { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -177,7 +191,7 @@ function dash() {
   const kpi = (label, v, pv, cls, sub) => '<div class="kpi ' + (cls || '') + '"><b>' + nf(v) + '</b><span>' + esc(label) + '</span>' + (sub ? '<small class="kd">' + esc(sub) + '</small>' : '') + (PV && pv != null ? '<small class="kd">' + esc(deltaTxt(v, pv)) + '</small>' : '') + '</div>';
   const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '';
   // 부문 × 구분
-  const keys = D.groupKeys.slice(); if (PV) Object.keys(PV.groups || {}).forEach(k => { if (!keys.includes(k)) keys.push(k); });
+  const keys = D.groupKeys.slice(); Object.keys(S.groups).concat(PV ? Object.keys(PV.groups || {}) : []).forEach(k => { if (!keys.includes(k)) keys.push(k); });
   const gsort = {}; D.groups.forEach(g => { const d = g.groupKey.split('|')[0], v = +g.sort || 999; gsort[d] = Math.min(gsort[d] || 999, v); });
   keys.sort((a, b) => (gsort[a.split('|')[0]] || 999) - (gsort[b.split('|')[0]] || 999) || KC.groupKeyCmp(a, b));
   const divs = []; keys.forEach(k => { const d = k.split('|')[0]; if (!divs.includes(d)) divs.push(d); });
@@ -197,6 +211,48 @@ function dash() {
     add(TT, sub); if (TP) add(TP, psub);
   });
   body += line('hl', '<b>합계</b>', '', TT, TP);
+  // 부문 × 구분 피벗 — 왼쪽 부문, 위쪽 구분 / 올해 표 오른쪽에 전년 표
+  const baseCat = c => String(c || '').replace(/\((남|여)\)$/, ''), gOf = c => (/\((남|여)\)$/.exec(c || '') || [])[1] || '';
+  const catName = c => c === '대학일반부' ? '대학·일반부' : c;
+  const cats = []; keys.forEach(k => { const c = baseCat(k.split('|')[1]); if (c && !cats.includes(c)) cats.push(c); });
+  cats.sort((a, b) => KC.groupKeyCmp('x|' + a, 'x|' + b));
+  const offCur = new Set(D.groupKeys.concat(Object.keys(S.groups))), offPrev = new Set(PV ? Object.keys(PV.groups || {}) : []);
+  const pick = (src, off, dv, c, g) => { let v = 0, has = false; keys.forEach(k => { const [d, cc] = k.split('|'); if (d !== dv || baseCat(cc) !== c || (g && gOf(cc) !== g)) return; if (off.has(k)) has = true; v += ((src || {})[k] || {}).n || 0; }); return has || v ? v : null; };
+  const cy = String(cfg.applyEnd || '').slice(0, 4) || S.year || String(new Date().getFullYear());
+  const yCur = cy + '년', yPrev = PV ? (PV.label || ((PV.year || (+cy - 1)) + '년')) : '';
+  const cell = (v, cls) => '<td class="' + (cls || '') + '">' + (v == null ? '' : v ? nf(v) : '<span class="z">0</span>') + '</td>';
+  const dCell = (a, b) => { const d = a - b; return '<td class="b ' + (d > 0 ? 'up' : d < 0 ? 'dn' : '') + '">' + (d > 0 ? '▲' + nf(d) : d < 0 ? '▼' + nf(-d) : '–') + (b && d ? ' <small>(' + (d > 0 ? '+' : '') + Math.round(d / b * 1000) / 10 + '%)</small>' : '') + '</td>'; };
+  const colC = cats.map(() => 0), colP = cats.map(() => 0);
+  const pvRow = (label, dv, g, cls) => {
+    const c = cats.map(ct => pick(S.groups, offCur, dv, ct, g)), pc = PV ? cats.map(ct => pick(PV.groups, offPrev, dv, ct, g)) : [];
+    const tc = c.reduce((a, v) => a + (v || 0), 0), tp = pc.reduce((a, v) => a + (v || 0), 0);
+    if (!g) { c.forEach((v, i) => colC[i] += v || 0); pc.forEach((v, i) => colP[i] += v || 0); }
+    return '<tr class="' + (cls || '') + '"><td>' + label + '</td>' + c.map((v, i) => cell(v, i ? '' : 'b')).join('') + '<td class="t">' + nf(tc) + '</td>' +
+      (PV ? pc.map((v, i) => cell(v, 'p' + (i ? '' : ' b'))).join('') + '<td class="t p">' + nf(tp) + '</td>' + dCell(tc, tp) : '') + '</tr>';
+  };
+  let pvBody = '';
+  divs.forEach(dv => {
+    pvBody += pvRow('<b>' + esc(dv) + '</b>', dv, '');
+    const gs = ['남', '여'].filter(g => keys.some(k => k.split('|')[0] === dv && gOf(k.split('|')[1]) === g));
+    if (gs.length) gs.forEach(g => { pvBody += pvRow('&nbsp;&nbsp;└ ' + g, dv, g, 'gs'); });
+  });
+  const tC = colC.reduce((a, v) => a + v, 0), tP = colP.reduce((a, v) => a + v, 0);
+  pvBody += '<tr class="hl"><td>합계</td>' + colC.map((v, i) => '<td class="' + (i ? '' : 'b') + '">' + nf(v) + '</td>').join('') + '<td class="t">' + nf(tC) + '</td>' +
+    (PV ? colP.map((v, i) => '<td class="p' + (i ? '' : ' b') + '">' + nf(v) + '</td>').join('') + '<td class="t p">' + nf(tP) + '</td>' + dCell(tC, tP) : '') + '</tr>';
+  const catTh = cats.map((c, i) => '<th class="' + (i ? '' : 'b') + '">' + esc(catName(c)) + '</th>').join('') + '<th class="t">계</th>';
+  const pivot = '<div class="scroll" style="margin-top:10px"><table class="gtab pv"><thead>' +
+    '<tr class="yr"><th rowspan="2" class="h" style="vertical-align:bottom">부문</th><th colspan="' + (cats.length + 1) + '" class="b">' + esc(yCur) + '<small>올해</small></th>' + (PV ? '<th colspan="' + (cats.length + 1) + '" class="b pr">' + esc(yPrev) + '<small>전년</small></th><th rowspan="2" class="b" style="vertical-align:bottom">증감</th>' : '') + '</tr>' +
+    '<tr>' + catTh + (PV ? catTh : '') + '</tr></thead><tbody>' + pvBody + '</tbody></table></div>';
+  const pivotRows = () => {
+    const h1 = ['부문'].concat(cats.map(c => yCur + ' ' + catName(c)), [yCur + ' 계']).concat(PV ? cats.map(c => yPrev + ' ' + catName(c)).concat([yPrev + ' 계', '증감']) : []);
+    const out = [h1];
+    const one = (label, dv, g) => { const c = cats.map(ct => pick(S.groups, offCur, dv, ct, g)), pc = PV ? cats.map(ct => pick(PV.groups, offPrev, dv, ct, g)) : [];
+      const tc = c.reduce((a, v) => a + (v || 0), 0), tp = pc.reduce((a, v) => a + (v || 0), 0);
+      out.push([label].concat(c.map(v => v == null ? '' : v), [tc]).concat(PV ? pc.map(v => v == null ? '' : v).concat([tp, tc - tp]) : [])); };
+    divs.forEach(dv => { one(dv, dv, ''); ['남', '여'].filter(g => keys.some(k => k.split('|')[0] === dv && gOf(k.split('|')[1]) === g)).forEach(g => one(dv + ' (' + g + ')', dv, g)); });
+    out.push(['합계'].concat(colC, [tC]).concat(PV ? colP.concat([tP, tC - tP]) : []));
+    return out;
+  };
   // 진행 (조편성 후)
   const live = new Set(D.participants.filter(isActive).map(p => p.id));
   const e1 = D.entries.filter(e => e.round === 'R1' && live.has(e.pid)), e2 = D.entries.filter(e => e.round === 'R2' && live.has(e.pid));
@@ -231,7 +287,9 @@ function dash() {
       kpi('지방 참가자', S.far, PV && PV.far, '', '오후 조 우선 배정 대상') + '</div>' +
     (S.total ? '' : '<div class="note" style="margin:12px 0">아직 참가자가 없어요. <b>참가자</b> 탭에서 홈페이지 신청자 엑셀을 불러오면 여기 숫자가 채워져요.' + (PV ? '' : ' 아래 <b>전년 자료</b>에 작년 파일을 넣어 두면 올해 접수가 시작될 때 바로 비교돼요.') + '</div>') +
     '<div class="card" style="margin-top:16px"><div class="row"><h2 style="margin:0">부문별 신청 현황</h2><span class="sp"></span>' + (S.first ? '<span class="small muted">접수 ' + esc(S.first) + ' ~ ' + esc(S.last) + ' · 남 ' + nf(S.male) + ' / 여 ' + nf(S.female) + '</span>' : '') + '</div>' +
-      '<div class="scroll" style="margin-top:10px"><table class="gtab dtab"><thead><tr><th>부문</th><th>구분</th><th class="n">신청</th><th class="n">입금 확인</th><th class="n">입금 대기</th><th class="n">남</th><th class="n">여</th><th class="n">지방</th>' + (PV ? '<th class="n">' + esc(PV.label || '전년') + '</th><th class="n">증감</th>' : '') + '</tr></thead><tbody>' + body + '</tbody></table></div>' +
+      pivot + '<p class="small muted" style="margin:6px 0 0">신청 = 취소·환불 제외. ' + (PV ? '오른쪽 회색 = ' + esc(yPrev) + ', 증감은 계 기준.' : '전년 자료를 넣으면 오른쪽에 전년 표가 붙어요.') + '</p>' +
+      '<details style="margin-top:12px"><summary class="small" style="cursor:pointer;font-weight:700">입금·성별·지방까지 자세히</summary>' +
+      '<div class="scroll" style="margin-top:10px"><table class="gtab dtab"><thead><tr><th>부문</th><th>구분</th><th class="n">신청</th><th class="n">입금 확인</th><th class="n">입금 대기</th><th class="n">남</th><th class="n">여</th><th class="n">지방</th>' + (PV ? '<th class="n">' + esc(PV.label || '전년') + '</th><th class="n">증감</th>' : '') + '</tr></thead><tbody>' + body + '</tbody></table></div></details>' +
       '<div class="row end" style="margin-top:12px"><button id="xcnt">현황 엑셀</button></div></div>' +
     '<div class="dgrid">' +
       '<div class="card"><h2>신청 추이 <small class="muted" style="font-weight:500;font-size:14px">누적 · 마감일 기준</small></h2><div id="trend"></div></div>' +
@@ -248,7 +306,7 @@ function dash() {
     g.push(['합계', ''].concat([TT.n, TT.paid, TT.wait, TT.m, TT.f, TT.far]).concat(TP ? [TP.n, TT.n - TP.n] : []));
     const kv = (o, p, ks) => [['구분', '올해'].concat(PV ? [PV.label || '전년'] : [])].concat(ks.map(k => [k, o[k] || 0].concat(PV ? [(p || {})[k] || 0] : [])));
     const days = Object.keys(Object.assign({}, S.daily)).sort();
-    App.writeXlsx([{ name: '부문별', rows: g }, { name: '지역', rows: kv(S.regions, PV && PV.regions, regs) }, { name: '학년', rows: kv(S.grades, PV && PV.grades, grs) }, { name: '일자별', rows: [['신청일', '신청', '누적']].concat((() => { let c = 0; return days.map(d => [d, S.daily[d], c += S.daily[d]]); })()) }], '신청현황_' + App.today() + '.xlsx');
+    App.writeXlsx([{ name: '부문×구분', rows: pivotRows() }, { name: '부문별', rows: g }, { name: '지역', rows: kv(S.regions, PV && PV.regions, regs) }, { name: '학년', rows: kv(S.grades, PV && PV.grades, grs) }, { name: '일자별', rows: [['신청일', '신청', '누적']].concat((() => { let c = 0; return days.map(d => [d, S.daily[d], c += S.daily[d]]); })()) }], '신청현황_' + App.today() + '.xlsx');
   });
   const pvf = $('#pvf'); if (pvf) pvf.addEventListener('change', e => { if (e.target.files[0]) loadPrevFile(e.target.files[0]); e.target.value = ''; });
   const pvx = $('#pvx'); if (pvx) pvx.addEventListener('click', () => confirmBox('전년 비교 자료를 지울까요?', '지우기', true).then(ok => ok && call('setConfig', { values: { prevStats: '' } }).then(() => { toast('지웠어요', 'ok'); refresh(); }).catch(onErr)));
