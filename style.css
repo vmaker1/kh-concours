@@ -131,6 +131,8 @@ tbody tr:hover td { background: #fbf8f9; }
 .note.ok { background: var(--ok-soft); color: #144d31; }
 .demo-bar { background: #1c1a1f; color: #fff; font-size: 14px; padding: 8px 16px; text-align: center; }
 .demo-bar b { color: #ffd7e2; }
+.demo-bar .db-btns { display: inline-flex; gap: 6px; margin-left: 8px; flex-wrap: wrap; }
+.demo-bar .db-btns button { min-height: 0; padding: 3px 10px; font-size: 13px; background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.35); border-radius: 6px; cursor: pointer; }
 
 /* 막대 */
 .bar { height: 10px; background: var(--panel); border-radius: 99px; overflow: hidden; }

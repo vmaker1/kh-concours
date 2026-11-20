@@ -1,13 +1,29 @@
 /* 콩쿠르 운영 시스템 — 화면 공용 스크립트 (API 연결, 데모 모드, 도우미, 인쇄 양식) */
 var App = (function () {
   var CFG = window.KC_CONFIG || {};
-  var DEMO = !CFG.apiUrl;
+  // 연습 모드: 실제 운영 주소에서도 ?practice=1 로 열면 이 브라우저 안에서만 돌아가는 연습판 (운영DB는 건드리지 않음)
+  var PRACTICE = false;
+  try {
+    if (/[?&]practice=1(&|$)/.test(location.search)) localStorage.setItem('kc_practice', '1');
+    if (/[?&]practice=0(&|$)/.test(location.search)) localStorage.removeItem('kc_practice');
+    PRACTICE = !!CFG.apiUrl && localStorage.getItem('kc_practice') === '1';
+  } catch (e) { }
+  var DEMO = !CFG.apiUrl || PRACTICE;
+  var DB_KEY = PRACTICE ? 'kc_practice_db_v1' : 'kc_demo_db_v5';
   var demoStore = null;
 
   /* ---------- 데모 모드 ---------- */
   var SUR = '김이박최정강조윤장임한오서신권황안송류홍전고문양손배백허유남심노하곽성차주우구민나진지엄채원천방공현함변염여추도소석선설마길연위표명기반왕금옥육인맹제모남궁'.split('');
   var GIV = ['서연', '민준', '하은', '지우', '서윤', '도윤', '하린', '예준', '지민', '수아', '시우', '유나', '주원', '채원', '건우', '다은', '은우', '서아', '현우', '윤서', '지호', '예린', '선우', '소율', '우진', '가은', '하율', '태윤', '수빈', '라엘', '세빈', '가원', '준혁', '윤재', '혜진', '진호', '수린', '시온', '은율', '하랑'];
   var SCH = { '초등부': ['예일초', '목운초', '잠일초', '숭신초', '신용산초', '매탄초'], '중등부': ['예원학교', '선화예술중', '계원예술중', '서울예중'], '고등부': ['서울예고', '선화예고', '계원예고', '경기예고'], '대학일반부': ['한국예술종합학교', '서울대', '연세대', '이화여대'] };
+  // 연습판에 기본 설정만 (참가자·심사위원 없이) — 실제 75회 신청자 엑셀·심사위원 명단을 직접 넣어 보는 용도
+  function seedEmpty(st) {
+    st.reset();
+    st.upsert('Config', 'key', [
+      { key: 'title', value: '제75회 이화경향음악콩쿠르 (연습)' }, { key: 'adminPassword', value: 'admin' }, { key: 'deskPin', value: '0000' },
+      { key: 'manager', value: '담당자' }, { key: 'pubKey', value: DEMO_KEY.pub }, { key: 'privKeyEnc', value: DEMO_KEY.privEnc }, { key: 'applyEnd', value: '2026-02-26' }
+    ]);
+  }
   function seedDemo(st) {
     var rnd = (function () { var x = 76; return function () { x = (x * 16807) % 2147483647; return (x - 1) / 2147483646; }; })();
     var pick = function (a) { return a[Math.floor(rnd() * a.length)]; };
@@ -33,7 +49,7 @@ var App = (function () {
           id: String(id++), name: pick(SUR) + pick(GIV), birth: yr + m + d, gender: rnd() < .55 ? '여성' : '남성',
           phone: ph, guardianName: pick(SUR) + pick(GIV), guardianPhone: '010' + String(20000000 + Math.floor(rnd() * 79999999)),
           school: pick(SCH[pl[1]]), grade: (1 + Math.floor(rnd() * (pl[1] === '초등부' ? 6 : 3))) + '학년',
-          division: pl[0], category: pl[1], payStatus: rnd() < .9 ? '입금 확인' : '입금 대기', appliedAt: '2027-02-' + d + ' 1' + Math.floor(rnd() * 9) + ':00:00',
+          division: pl[0], category: pl[1], payStatus: rnd() < .9 ? '입금 확인' : '입금 대기', appliedAt: '2026-02-' + d + ' 1' + Math.floor(rnd() * 9) + ':00:00',
           pieces: pl[0] === '성악' ? vocalPieces(pl[1]) : ''
         });
         // 74회 엑셀처럼 '성악(여)' · '대학·일반부'로 들어와도 같은 부문으로 묶이는지 보여 주는 예
@@ -42,7 +58,7 @@ var App = (function () {
     });
     st.reset();
     st.upsert('Config', 'key', [
-      { key: 'title', value: '제76회 이화경향음악콩쿠르 (데모)' }, { key: 'adminPassword', value: 'admin' }, { key: 'deskPin', value: '0000' },
+      { key: 'title', value: '제75회 이화경향음악콩쿠르 (' + (PRACTICE ? '연습' : '데모') + ')' }, { key: 'adminPassword', value: 'admin' }, { key: 'deskPin', value: '0000' },
       { key: 'publishR1Schedule', value: 'Y' }, { key: 'notice', value: '데모 화면입니다. 실제 참가자 정보가 아닌 가상 데이터예요.' },
       { key: 'calendarNote', value: '*전국연합학력평가(고등학생) : 3월 26일(목) — 예시 메모' }
     ]);
@@ -56,10 +72,10 @@ var App = (function () {
     H('saveGroups', { groups: G.map(function (x) { return { groupKey: x[0], perSec: String(x[1]), groupSize: String(x[2]) }; }) });
     var blk = function (k, more) { var x = G.filter(function (g) { return g[0] === k; })[0]; return Object.assign({ groupKey: k, count: paid(k), perSec: x[1], size: x[2] }, more || {}); };
     H('savePlan', { round: 'R1', days: [
-      { date: '2027-03-23', start: '11:00', piano: 'Y', venue: '이화여고 유관순기념관', blocks: [blk('피아노|중등부')] },
-      { date: '2027-03-24', start: '10:40', piano: 'Y', venue: '이화여고 유관순기념관', blocks: [blk('피아노|초등부')] },
-      { date: '2027-03-25', start: '09:30', piano: 'Y', venue: '이화여고 유관순기념관', blocks: [blk('바이올린|초등부'), blk('성악|고등부(남)', { pmOnly: true }), blk('성악|고등부(여)')], note: '오후 성악 심사위원 교체' },
-      { date: '2027-03-26', start: '09:30', piano: 'Y', venue: '이화여고 유관순기념관', blocks: [blk('성악|대학일반부(남)'), blk('성악|대학일반부(여)', { pmOnly: true })] }
+      { date: '2026-03-25', start: '11:00', piano: 'Y', venue: '이화여고 유관순기념관', blocks: [blk('피아노|중등부')] },
+      { date: '2026-03-26', start: '10:40', piano: 'Y', venue: '이화여고 유관순기념관', blocks: [blk('피아노|초등부')] },
+      { date: '2026-03-27', start: '09:30', piano: 'Y', venue: '이화여고 유관순기념관', blocks: [blk('바이올린|초등부'), blk('성악|고등부(남)', { pmOnly: true }), blk('성악|고등부(여)')], note: '오후 성악 심사위원 교체' },
+      { date: '2026-03-30', start: '09:30', piano: 'Y', venue: '이화여고 유관순기념관', blocks: [blk('성악|대학일반부(남)'), blk('성악|대학일반부(여)', { pmOnly: true })] }
     ] });
     H('applyPlan', { round: 'R1', farAfternoon: true });
     var J = [];
@@ -76,7 +92,7 @@ var App = (function () {
     var JJ = H('adminLoad', {}).judges.map(function (j) { return j.name === '김예선' ? Object.assign({}, j, { staffId: sid[0] }) : j.name === '한본선' ? Object.assign({}, j, { staffId: sid[1] }) : j; });
     H('saveJudges', { judges: JJ });
     var W = [];
-    ['2027-03-23', '2027-03-24', '2027-03-25', '2027-03-26'].forEach(function (d, i) {
+    ['2026-03-25', '2026-03-26', '2026-03-27', '2026-03-30'].forEach(function (d, i) {
       W.push({ staffId: sid[2], date: d, planStart: '08:30', planEnd: '17:00', role: '대기실' });
       if (i % 2 === 0) W.push({ staffId: sid[3], date: d, planStart: '08:30', planEnd: '17:00', role: '접수' });
       if (i >= 2) W.push({ staffId: sid[4], date: d, planStart: '12:30', planEnd: '17:30', role: '무대' });
@@ -85,10 +101,18 @@ var App = (function () {
   }
   var DEMO_KEY = {"pub": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA4sDkPariOy8JDz2h80kt0xj_6nx2DTSVkMnYcBYlqMdwwnWAghClNYVwP8wItekFFOVT32ocTn_BBSPOE0zbpWJvBsM1prauM75LJSKgPeO1JHy5kDfgKeQaOI_H3DTWEucrRYGx3kTcD9JBKMLknyctiWVwrgYJkbmb2kB9NI_3Q4G3NLwg9-X89l8tcvsOGDMjp_gXhiC9ULabiqlrbcqJHjm9QxJ5xnhskctKLp0WcFo1clT2jNe6FsP2zBgiBF3foRO4Nci0I09sAppzk8GbyEIFoC20e2ddbJdL4gWwIb_7RBTrD-kQWdyA_qpCVqEwnWAvooycpe5Nt1YFPU3jy2xpc7ozfjVcDnR3PVsQS-zZNvmK2SNPAFJKc1JvVQkJXrDJva9XYBHXPJ3pmepWh5KMvUOwLQO8HmRG5vsUwEDtPOgF03UZyJ72IthJr3YnYFp-Zdfm5CgXuBQLB_lPn4QovJzWkLR7TzITFFRda6Y9iJB9rhcLLrYzRjMlAgMBAAE", "privEnc": "K1.bK0kmsyfROr-4kFsV3wg3w.uyA3kkNLuj3q71c4.d3P-K-JSEQ1H8IqmMWC4NCuzLtQRjN4KnTAVMiHGYR8sIg9QBrUO9Ii8xsTtmfy2KYwClwwrPbrY2PxArUmGdIe97HUcFT5jf9nUBnVTyMjheUIvOXtV4iIVALuPbJVhGGNPIKkPYRHjHM4bgm3Quv7QflbNkuOgbGz4c5Ur32WSGDdXOilbCAT9W530JD4RchmFu76cxl4MGLrv8vbNXurHG2ePwSS_Fgqsi6F1056QXq56emsXzvMoSZiTChdTcA_34S8UQfolw8TysNGOFaxhtSUNElHPTU06jHd1DLw8i_LqfWcAGGfa2SpcS3YmbDAcEfJ00vFQJB0XNp3bbSzkoyUBLaxxmBJ_PXI3xC2gZ5uCz1tSKTIjPP2Z2NZdP2IqKDSyuobK4UOSrIZcbK5ly6ngFzr0jCliGnfgu3Dioi1dcK09rvb-FaqlEtEUDAryYzfPltykeDTO3nDbIn1HvTf0Pgqdv8xrfpT_LFUH3zR6ojE3aJ6PfoW35HqGX1ElH_YOEGjqjsfKOBBSkkLO0bnBM6bJsZKiA0Sf7SjuDXN-cJZy0fu4V0lhxn6aTYLtP8yB8gxaazq7SVx1JiFouRntJhPIcYTGahJ7atax7BbiJqS38K1bjSIcr9Xqn2Xgs-ZF4zHUQE-fNEUxX12nO4hDHWntPocAbTKrMNXs9JtjWfgSVJfXgPvZfBrl26nrmGnwTuRkuWj1M6jp-JYj93_Aw2RWmBwUFRjg7C1_GMdXsYvVrCb5rFp-eA5eRZJFDQYNTV8EzwmE9YbcJSl3-6y7TtEPOZbO55Ecv3gBLl29aJrob1r1Oi_9pFUFXUz-BKc_txMTgV8SwdKfKwllwc5pu0OM-FBGTESgJo72faY2ady4cB8ihK4XPcClSuATNI3T2W7XuV2q9wfgivDqGgNnRMIRf2mMQ1SqhEbw_ChVd-PjcWRwsqtELAgyWONXThr_Cp6E4tPLHimG_bANb6WjfY8-zNkWY-z3Z19tXEPWY0fRlVb4b0EFDEN8aZzzttBd-B0GlZmC5XzCjIUqdTL5--cJEtb4oQuTa4r60m_TVLKOTMhIpLoHmCVL95q4Zm2Hqj4SwE0ivum0NsoW6zooBADCSrVxu_OossxHROY5fGvTCO-Gakrb84XixqiZjGja2tHWwlLR_8VDNHsflQhzV2WS7xIDycsn6MbHBhwrxXdwb7bL--Vv_QkyDS-JqMS42Gvj9EtQeBIDrPE_oTZANV8HmAvpjwlneC1SoB-nSv8Nljo7IGYnH6dCbxYGpgM8g6H6l7VMiSdUirfA24hacTu53TyOvOfqfvsHs-vLJGluHFPZn0RsZUTOBPdMeIj9iKm7-JjehNXR5YPQiFRkJVGKe7F9GZ3NQz1yE5QCMRp2Sot3x6GzmovFadFy_XDdrAD65QdbgW-wKg1UX_2gQppl3riuyVA221sHY9j3jR57kBaHfczwbPkwPgWP5GJXFfEoEj1GsX2mYdjY8_iuh0-gC9CRGFAvS8JQbr2oOh5aTPTe5BydWyYiVpwVDQrWsJe1chZWKfA_P-sfoYvbY0DRK2n132i49UnIt4JXMkhTlS-Hrff7MDo2r0SWVPjPHrrhLLZecMDFY5Izvp7rK7W03zxunms_WESj96Fe_5fuGeOZIx9eXdqepKH8wZlnRn0m9S34ID56R-PMZeOteXsMWgKCgbG9Zvv1IK3RLsk-t7jki7ArLlkKbjeu2Eu73ilXUmtvFnVf08TXfvoxktdJ1_7eZlW5Lui_7aPj62myx5_k0ly-m6bdr67Q52sQW4RaUiC1MECNvzETnF9lDaUEt2dbmWQPokfcR5YsfVxxKH8jucwzZsv0Uo9WA3cDARxMDOo1NwYDMBRVpx-wZaql9X3Q9dFX6CKrsaUYVtV6DZFawfWZelwxRdfPmTu7i-dOhubvayXmPKU2tWpnAjx_5ILuHetgo40ZGGLXLTd5cmTXKol0tlVFwpw1BuR_oOYrnqwJqyfbBJfkOf-TzL8AMYiNXIjFd-k_MLY-1tHymxeY5R7uD8JI8BYsOJoKOPMS5zvJJilio74OflTVnwYVPtCPp6ZjnWXLkq4N9NFtsjxoh3AIB-FFmNZXWfD7u-I9gUsGmrpe2ogCNBm_1-nngzftkwQuqZGj3rdWnf-sZejwYRh1LJtX1xXE0oeDkMHtVWBRfGDZQm341zV87y-Dpi5nRoh4XZ4X4tJJ_wHIk-hX3UOfP4169Os6BakgmRQAcOUSOhD8fsu0QjT4Gycxbg0vXMfHOlTP4LQqtxTSvfwgH4W5g0u1GkTIg0G9PxdRpGMG0chkO8l5Zp65fVvI1j0mzNGCoGxoqAz0WkA953uOEZGv9MO4OM3ljsybSWiFZpPVhqTg11Y0jFvsJdGd7eHb1cxmIbMaqA"};
   function store() {
-    if (!demoStore) { demoStore = KCLocalStore.create({ key: 'kc_demo_db_v5' }); if (demoStore.isEmpty()) seedDemo(demoStore); }
+    if (!demoStore) { demoStore = KCLocalStore.create({ key: DB_KEY }); if (demoStore.isEmpty()) seedDemo(demoStore); }
     return demoStore;
   }
-  function resetDemo() { var st = store(); seedDemo(st); }
+  function resetDemo(empty) { var st = store(); if (empty) seedEmpty(st); else seedDemo(st); }
+  // 연습 끝내기: wipe = 이 브라우저에 남은 연습 자료(실제 명단을 넣었을 수도 있음)까지 지움
+  function endPractice(wipe) {
+    try {
+      if (wipe) { localStorage.removeItem('kc_practice_db_v1'); ['admin', 'desk', 'judge', 'participant', 'staff'].forEach(function (r) { localStorage.removeItem('kc_tk_' + r + '_demo'); }); }
+      localStorage.removeItem('kc_practice');
+    } catch (e) { }
+    location.href = location.pathname;
+  }
 
   /* ---------- API ---------- */
   function tokenKey(role) { return 'kc_tk_' + role + (DEMO ? '_demo' : ''); }
@@ -152,8 +176,28 @@ var App = (function () {
   function demoBar() {
     if (!DEMO) return;
     var d = document.createElement('div'); d.className = 'demo-bar';
-    d.innerHTML = '<b>데모 모드</b> · 이 브라우저 안에서만 저장되는 가상 데이터예요. 관리자 <b>admin</b> · 현장 PIN <b>0000</b> · 예선 심사 PIN <b>1001~1005</b>(피아노) <b>2001~2005</b>(바이올린·성악) · 본선 심사 PIN <b>7001~7007</b>';
+    var pins = '관리자 <b>admin</b> · 현장 PIN <b>0000</b>';
+    if (PRACTICE) {
+      d.innerHTML = '<b>연습 모드</b> · 실제 운영DB와 따로, <u>이 브라우저에만</u> 저장돼요 · ' + pins +
+        ' <span class="db-btns"><button data-db="fill">가상 자료로 채우기</button><button data-db="empty">비우고 시작</button><button data-db="end">연습 끝내기</button></span>';
+    } else {
+      d.innerHTML = '<b>데모 모드</b> · 이 브라우저 안에서만 저장되는 가상 데이터예요. ' + pins + ' · 예선 심사 PIN <b>1001~1005</b>(피아노) <b>2001~2005</b>(바이올린·성악) · 본선 심사 PIN <b>7001~7007</b>';
+    }
     document.body.insertBefore(d, document.body.firstChild);
+    var on = function (k, fn) { var b = d.querySelector('[data-db="' + k + '"]'); if (b) b.addEventListener('click', fn); };
+    on('fill', function () { confirmBox('연습 자료를 지우고 가상 참가자·조편성·심사위원으로 다시 채울까요?', '다시 채우기', true).then(function (ok) { if (ok) { resetDemo(false); location.reload(); } }); });
+    on('empty', function () { confirmBox('연습 자료를 모두 비울까요? 기본 설정만 남아요. 그다음 참가자 탭에서 신청자 엑셀을, 심사위원 탭에서 명단을 넣어 연습하면 돼요.', '비우기', true).then(function (ok) { if (ok) { resetDemo(true); location.reload(); } }); });
+    on('end', function () {
+      var m = modal('<h2>연습 끝내기</h2><p>실제 운영 화면으로 돌아가요. 연습하면서 넣은 자료(실제 명단을 넣었다면 그것도)는 이 브라우저에 남아 있어요.</p>' +
+        '<div class="row end" style="margin-top:12px"><button data-close>취소</button><button id="pk">남겨 두고 끝내기</button><button class="pri" id="pw">지우고 끝내기</button></div>');
+      $('#pk', m.el).addEventListener('click', function () { endPractice(false); });
+      $('#pw', m.el).addEventListener('click', function () { endPractice(true); });
+    });
+  }
+  // 운영 화면 로그인 아래에 붙이는 '연습 모드로 열기' 안내 (운영 주소에서만)
+  function practiceLink() {
+    if (DEMO) return '';
+    return '<p class="small muted" style="text-align:center;margin-top:14px"><a href="?practice=1">연습 모드로 열기</a> — 실제 운영DB와 따로, 이 브라우저에서만 조편성·채점 등을 시험해 볼 수 있어요.</p>';
   }
 
   /* ---------- 로그인 화면 ---------- */
@@ -382,7 +426,7 @@ var App = (function () {
 
   return {
     brandHTML: brandHTML,
-    DEMO: DEMO, api: api, getToken: getToken, setToken: setToken, resetDemo: resetDemo, store: store,
+    DEMO: DEMO, PRACTICE: PRACTICE, practiceLink: practiceLink, endPractice: endPractice, api: api, getToken: getToken, setToken: setToken, resetDemo: resetDemo, store: store,
     $: $, $$: $$, esc: esc, toast: toast, modal: modal, confirmBox: confirmBox, busy: busy,
     fmtDate: fmtDate, fmtBirth: fmtBirth, phone4: phone4, today: today, applyTheme: applyTheme, demoBar: demoBar,
     loginView: loginView, readWorkbook: readWorkbook, findHeaderRow: findHeaderRow, autoMap: autoMap, piecesFrom: piecesFrom, hasPieceColumns: hasPieceColumns, piecesHTML: piecesHTML,

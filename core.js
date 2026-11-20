@@ -49,7 +49,7 @@ var KC = (function () {
   };
 
   var DEFAULT_CONFIG = {
-    title: '제76회 이화경향음악콩쿠르',
+    title: '제75회 이화경향음악콩쿠르',   // 해마다 회차만 바꿔 주세요 (2026년 = 75회, 2027년 = 76회)
     shortTitle: '이화경향음악콩쿠르',
     brandLogo: '',           // 화면 왼쪽 위 로고: 비우면 자동(이화경향 → 이화경향 BI), none = 없음, 이미지 주소도 가능
     organizer: '경향신문사',

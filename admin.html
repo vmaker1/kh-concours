@@ -120,7 +120,10 @@ const PT = (p, r) => KC.piecesText(KC.piecesFor(p, r));           // 곡목 한 
 const GL = k => KC.groupLabel(k);
 const call = (a, p) => api(a, p, 'admin');
 function onErr(e) { if (e.needLogin) needLogin(); else toast(e.message, 'bad'); }
-function needLogin() { App.loginView(app, 'admin', '콩쿠르 운영 관리', '관리자 비밀번호를 입력해 주세요.', () => load()); }
+function needLogin() {
+  App.loginView(app, 'admin', '콩쿠르 운영 관리', '관리자 비밀번호를 입력해 주세요.', () => load());
+  const pl = App.practiceLink(); if (pl) app.querySelector('.card').insertAdjacentHTML('afterend', pl);
+}
 const rname = r => r === 'R2' ? (D.cfg.r2Name || '본선') : (D.cfg.r1Name || '예선');
 
 let EPOCH = 0; // 나가기 뒤에 늦게 도착한 응답이 화면을 다시 그리지 않게
@@ -186,9 +189,15 @@ function prevStats() { try { return D.cfg.prevStats ? JSON.parse(D.cfg.prevStats
 // 기준·비교 회차: 'live'(올해, 이 시스템 자료) · 's75'(지난 회차 보관함) · 'prev'(예전 '전년 자료' 한 개)
 let DBASE = 'live', DCMP = null;   // DCMP: null = 기준 바로 앞 회차, '' = 비교 안 함
 const liveNo = () => +((/(\d+)\s*회/.exec((D && D.cfg.title) || '') || [])[1] || 0);
+// 올해 자료의 연도: 접수 마감일 → 없으면 신청일 중 가장 늦은 날
+function liveYear() {
+  const y = String(D.cfg.applyEnd || '').slice(0, 4); if (/^\d{4}$/.test(y)) return y;
+  let last = ''; D.participants.forEach(p => { const d = String(p.appliedAt || '').slice(0, 10).replace(/\./g, '-'); if (/^\d{4}-/.test(d) && d > last) last = d; });
+  return last.slice(0, 4);
+}
 function seasonOpts() {
-  const out = [], ln = liveNo();
-  out.push({ id: 'live', no: ln || 9999, live: true, label: (ln ? ln + '회 ' : '') + '올해 (진행 중)' });
+  const out = [], ln = liveNo(), ly = liveYear();
+  out.push({ id: 'live', no: ln || 9999, live: true, year: ly, label: (ln ? ln + '회 ' : '') + (ly ? '(' + ly + ') ' : '') + '올해' });
   (D.seasons || []).map(z => { let st = null; try { st = JSON.parse(z.stats); } catch (e) { } return st ? { id: 's' + z.no, no: +z.no, label: z.label || (z.no + '회'), st, z } : null; })
     .filter(Boolean).sort((a, b) => b.no - a.no).forEach(x => out.push(x));
   const pv = prevStats(); if (pv) out.push({ id: 'prev', no: -1, label: (pv.label || '전년') + ' (전년 자료)', st: pv });
@@ -304,7 +313,11 @@ function dash() {
   const PICK = '<div class="row" style="gap:8px;margin:0 0 10px;align-items:center"><b>기준</b><select id="dbase" style="width:auto">' + optH(BO.id) + '</select>' +
     '<b style="margin-left:6px">비교</b><select id="dcmp" style="width:auto"><option value="">비교 안 함</option>' + optH(CID, BO.id) + '</select>' +
     '<span class="sp"></span><button class="ghost sm" id="goarch">지난 회차 넣기·검색</button></div>' +
-    (LIVE ? '' : '<div class="note small" style="margin:0 0 10px">' + esc(BO.label) + ' 기준으로 보는 중이에요 — 보관된 인원 수로 그린 화면이라 조편성·진행 현황은 없어요.</div>');
+    (LIVE ? '' : '<div class="note small" style="margin:0 0 10px">' + esc(BO.label) + ' 기준으로 보는 중이에요 — 보관된 인원 수로 그린 화면이라 조편성·진행 현황은 없어요.</div>') +
+    (() => { // 대회 이름의 회차와 자료 연도가 어긋나 보이면 알려 주기 (예: 2026년 자료인데 '제76회'로 되어 있음)
+      const L = O[0], same = O.find(o => !o.live && o.st && o.st.year && o.st.year === L.year && o.no > 0 && o.no !== L.no);
+      return same && L.no !== 9999 ? '<div class="note warn small" style="margin:0 0 10px">올해 자료가 <b>' + esc(L.year) + '년</b>인데 대회 이름은 <b>제' + L.no + '회</b>예요. ' + esc(same.label) + '도 ' + esc(L.year) + '년이라, 회차가 맞는지 <b>설정 › 대회 이름</b>을 확인해 주세요.</div>' : '';
+    })();
   const SEAS = O.filter(o => !o.live);
   PVBOX = (SEAS.length ? '<table class="small"><tbody>' + SEAS.map(o => '<tr><td><b>' + esc(o.label) + '</b></td><td class="n">' + nf(o.st.active) + '명</td><td class="muted">' + (o.z ? (+o.z.people ? '명단 보관 ~' + esc(o.z.purgeAt) : '인원 수만') : '인원 수만') + '</td></tr>').join('') + '</tbody></table>' : '<p>지난 회차 신청자 엑셀(73·74·75회 …)을 넣어 두면 여기서 회차를 골라 비교할 수 있어요.</p>') +
     '<p class="small muted" style="margin-top:8px">이름 명단은 접수 마지막 날로부터 ' + 3 + '년만 보관하고, 그 뒤에는 인원 수만 남아요.</p><div class="row"><button class="pri" id="goarch2">지난 회차 넣기·검색</button>' + (prevStats() ? '<button class="ghost danger" id="pvx">예전 전년 자료 지우기</button>' : '') + '</div>';
