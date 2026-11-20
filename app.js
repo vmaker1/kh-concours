@@ -175,11 +175,11 @@ var App = (function () {
     id: ['번호', '접수번호', '신청번호', '참가번호', 'no', 'No'], name: ['이름', '성명', '참가자명', '참가자', '성 명'],
     birth: ['생년 월일', '생년월일', '생일', '생년'], gender: ['성별'], phone: ['휴대폰 번호', '휴대폰번호', '휴대폰', '핸드폰', '연락처', '휴대전화'],
     guardianName: ['보호자 성명', '보호자명', '보호자 이름', '보호자'], guardianPhone: ['보호자 휴대폰번호', '보호자 휴대폰', '보호자 연락처', '보호자 전화번호', '보호자 번호'],
-    email: ['이메일', 'email', 'E-mail'], zip: ['우편번호', '우편 번호'], address: ['주소 1', '주소1', '주소', '기본주소'], school: ['학교', '소속', '학교명'], grade: ['학년'], division: ['지원 부문', '지원부문', '부문', '악기', '참가부문'],
+    email: ['이메일', 'email', 'E-mail'], zip: ['우편번호', '우편 번호'], address: ['주소 1', '주소1', '주소', '기본주소'], address2: ['주소 2', '주소2', '상세주소', '상세 주소'], school: ['학교', '소속', '학교명'], grade: ['학년'], division: ['지원 부문', '지원부문', '부문', '악기', '참가부문'],
     category: ['지원 구분', '지원구분', '구분', '참가구분', '학년구분'], payStatus: ['결제 상태', '결제상태', '입금상태', '입금 여부'],
     appliedAt: ['신청일', '신청일시', '접수일'], status: ['신청상태', '신청 상태', '상태'], teacher: ['사사선생님', '사사 선생님', '지도교사', '지도 선생님'], note: ['비고']
   };
-  var FIELD_LABEL = { id: '접수번호', name: '이름', birth: '생년월일', gender: '성별', phone: '휴대폰', guardianName: '보호자 이름', guardianPhone: '보호자 휴대폰', email: '이메일', zip: '우편번호', address: '주소 (시·도 판별용)', school: '학교', grade: '학년', division: '지원 부문', category: '지원 구분', payStatus: '결제 상태', appliedAt: '신청일', status: '신청 상태', teacher: '사사 선생님', note: '비고' };
+  var FIELD_LABEL = { id: '접수번호', name: '이름', birth: '생년월일', gender: '성별', phone: '휴대폰', guardianName: '보호자 이름', guardianPhone: '보호자 휴대폰', email: '이메일', zip: '우편번호', address: '주소', address2: '상세 주소', school: '학교', grade: '학년', division: '지원 부문', category: '지원 구분', payStatus: '결제 상태', appliedAt: '신청일', status: '신청 상태', teacher: '사사 선생님', note: '비고' };
   function readWorkbook(file) {
     return file.arrayBuffer().then(function (buf) {
       var wb = XLSX.read(buf, { type: 'array', cellDates: false });
@@ -250,9 +250,9 @@ var App = (function () {
   }
 
   /* ---------- 인쇄 ---------- */
-  function printHTML(html) {
+  function printHTML(html, opt) {
     var root = $('#print-root'); if (!root) { root = document.createElement('div'); root.id = 'print-root'; document.body.appendChild(root); }
-    root.innerHTML = html;
+    root.innerHTML = (opt && opt.landscape ? '<style>@media print { @page { size: A4 landscape; margin: 10mm; } }</style>' : '') + html;
     setTimeout(function () { window.print(); }, 120);
   }
   function qrSvg(text, cell) {
@@ -346,6 +346,7 @@ var App = (function () {
     return Promise.all([fetch('templates/' + data.file).then(function (r) { if (!r.ok) throw new Error('양식 파일을 찾지 못했어요: ' + data.file); return r.arrayBuffer(); }), data.seal ? sampleSeal() : null])
       .then(function (x) {
         var images = {}; if (x[1] && data.seal) { images.직인 = Object.assign({ data: x[1] }, data.seal); }
+        if (data.lines) return DF.linesDocx(x[0], data, { type: 'blob' });
         return DF.fill(x[0], { fields: data.fields, pages: data.pages, images: images }, { type: 'blob' });
       }).then(function (blob) { downloadBlob(blob, safeName(name || data.title) + '.docx'); });
   }

@@ -11,10 +11,11 @@ var FM = (function () {
   var FORMS = {
     tt_public: { name: '시간표 (공개용)', type: 'doc', file: 'tt_public.docx', cat: '시간표', desc: '날짜마다 한 장. 예선은 인원 없이' },
     tt_ops: { name: '시간표 (운영·심사위원용)', type: 'doc', file: 'tt_ops.docx', cat: '시간표', desc: '인원·추첨시각·메모 포함' },
+    tt_wall: { name: '시간표 (벽보용)', type: 'doc', file: 'tt_public.docx', cat: '시간표', desc: '75회 예선·본선시간표(종합) 모양 — 큰 글씨, 하루 한 장 + 부문별 장', lines: true },
     att_group: { name: '조별 출석부', type: 'sheet', file: 'att_group.xlsx', cat: '현장', desc: '조마다 한 탭, 조별 순서대로' },
     att_perf: { name: '현장 경연순서 출석부', type: 'sheet', file: 'att_perf.xlsx', cat: '현장', desc: '추첨 후 경연순번 순서' },
     pieces: { name: '곡목 알림표', type: 'sheet', file: 'pieces.xlsx', cat: '현장', desc: '경연순번과 곡목 (이름 없음)' },
-    score_ox: { name: '예선 채점표 (예비)', type: 'sheet', file: 'score_ox.xlsx', cat: '현장', desc: '전산 장애 대비 O/X 표' },
+    score_ox: { name: '예선 채점표 (예비)', type: 'sheet', file: 'score_ox.xlsx', cat: '현장', desc: '심사위원별·심사일별 한 장에 60명 (O/X)' },
     score_rank: { name: '본선 채점표 (예비)', type: 'sheet', file: 'score_rank.xlsx', cat: '현장', desc: '전산 장애 대비 등위 표' },
     staff_att: { name: '진행요원 출석부', type: 'sheet', file: 'staff_att.xlsx', cat: '현장', desc: '근무일마다 한 탭' },
     gonggyeol: { name: '공결 협조 공문', type: 'doc', file: 'gonggyeol.docx', cat: '공문', series: '공문', desc: '참가자·반주자 학교·부대·기관에' },
@@ -176,6 +177,70 @@ var FM = (function () {
     });
     return { sheets: sheets, warn: warn, headers: [['경연순번', '경연순번'], ['추첨번호', '추첨번호'], ['성명', '성명'], ['학교', '학교'], ['학년', '학년'], ['출석', '출석'], ['비고', '비고']] };
   }
+  /* 예선 종이 채점표 — 심사위원 × 심사일마다, 한 장에 60칸 (왼쪽 1~30번째, 오른쪽 31~60번째)
+   * 그날 그 심사위원이 맡은 조를 경연순번대로 이어 붙이고, 조가 바뀌는 칸에 '▶ 2조 10:30' 표시.
+   * 조편성 전이면 명단의 심사일로 1~60 빈 칸 장을 만듦 */
+  var PER_PAGE = 60, HALF = 30;
+  function cmpK(a, b) { return K && K.cmpKo ? K.cmpKo(a, b) : String(a).localeCompare(String(b), 'ko'); }
+  function gkCmp(a, b) { return K && K.groupKeyCmp ? K.groupKeyCmp(a, b) : cmpK(a, b); }
+  function groupText(gks) {
+    if (!gks.length) return '';
+    var divs = [], cats = {};
+    gks.forEach(function (k) { var g = split(k); if (divs.indexOf(g.div) < 0) divs.push(g.div); (cats[g.div] = cats[g.div] || []); if (g.cat && cats[g.div].indexOf(g.cat) < 0) cats[g.div].push(g.cat); });
+    return divs.map(function (d) { return d + (cats[d].length ? ' ' + cats[d].join('·') : ''); }).join(', ');
+  }
+  function judgeDayPages(L, opt) {
+    opt = opt || {};
+    var round = opt.round || 'R1', c = counts(L), per = opt.per || PER_PAGE, out = [], poC = {};
+    var ses = (L.sessions || []).filter(function (x) { return x.round === round; });
+    var js = (L.judges || []).filter(function (j) { return j.round === round && (!opt.judgeIds || !opt.judgeIds.length || opt.judgeIds.indexOf(j.judgeId) >= 0); });
+    if (!(L.judges || []).some(function (j) { return j.round === round; })) {   // 심사위원 등록 전: 부문마다 이름 빈 칸
+      var seen = {}; ses.forEach(function (x) { var dv = split(x.groupKey).div; if (!seen[dv]) { seen[dv] = 1; js.push({ judgeId: '', name: '', round: round, groups: dv, seat: '' }); } });
+    }
+    var divOf = function (j) { return s(j.groups).split(/[|,\s]/)[0]; };
+    js.sort(function (a, b) { return gkCmp(divOf(a), divOf(b)) || (+a.seat || 99) - (+b.seat || 99) || cmpK(a.name, b.name); });
+    function po(gk) { return poC[gk] || (poC[gk] = perfOrders(L, round, gk)); }
+    js.forEach(function (j) {
+      var fixed = s(j.dates).split(/[,\s]+/).filter(Boolean), info = K && K.parseDayInfo ? K.parseDayInfo(j.dayInfo) : {};
+      var mine = ses.filter(function (x) { return (!K || K.judgeCovers(j, x.groupKey)) && (!fixed.length || fixed.indexOf(x.date) >= 0); });
+      if (opt.groupKey) mine = mine.filter(function (x) { return x.groupKey === opt.groupKey || split(x.groupKey).div === opt.groupKey; });
+      var dates = {}; mine.forEach(function (x) { dates[x.date] = 1; });
+      if (!opt.groupKey || divOf(j) === opt.groupKey || s(j.groups).indexOf(opt.groupKey) >= 0) fixed.forEach(function (d) { dates[d] = 1; });
+      Object.keys(dates).sort().forEach(function (d) {
+        if (opt.dates && opt.dates.length && opt.dates.indexOf(d) < 0) return;
+        var ds = mine.filter(function (x) { return x.date === d; }).sort(function (a, b) { return gkCmp(a.groupKey, b.groupKey) || cmpK(s(a.startTime), s(b.startTime)) || (+a.no) - (+b.no); });
+        var gks = []; ds.forEach(function (x) { if (gks.indexOf(x.groupKey) < 0) gks.push(x.groupKey); });
+        var multiDiv = gks.some(function (k) { return split(k).div !== split(gks[0]).div; });
+        var slots = [];
+        ds.forEach(function (x) {
+          var rg = po(x.groupKey).range[x.sessionId] || [1, c[x.sessionId] || 0], g = split(x.groupKey);
+          for (var n = rg[0]; n <= rg[1]; n++) slots.push({ no: String(n), mark: n === rg[0] ? '▶ ' + (multiDiv ? g.div + ' ' + g.cat + ' ' : gks.length > 1 ? g.cat + ' ' : '') + (x.label || x.no + '조') + (x.startTime ? ' ' + x.startTime : '') : '' });
+        });
+        var blank = !slots.length;
+        if (blank) for (var b = 1; b <= per; b++) slots.push({ no: String(b), mark: '' });
+        var pages = Math.ceil(slots.length / per), x0 = info[d] || {};
+        var gt = gks.length ? groupText(gks) : groupText(s(j.groups).split(/\s*,\s*/).filter(Boolean));
+        for (var p = 0; p < pages; p++) out.push({ judge: j, date: d, slots: slots.slice(p * per, (p + 1) * per), page: p + 1, pages: pages, blank: blank, count: blank ? 0 : slots.length, groups: gt, shift: x0.shift || '', arrive: x0.arrive || '' });
+      });
+    });
+    return out;
+  }
+  function pageRows(slots) {
+    var rows = [];
+    for (var i = 0; i < HALF; i++) { var a = slots[i] || {}, b = slots[i + HALF] || {}; rows.push({ 번호1: a.no || '', 메모1: a.mark || '', 번호2: b.no || '', 메모2: b.mark || '' }); }
+    return rows;
+  }
+  function scoreOx(L, opt) {
+    var used = {}, round = opt.round || 'R1', cfg = L.cfg || {}, warn = [];
+    var pages = judgeDayPages(L, { round: round, groupKey: opt.groupKey, dates: opt.dates, judgeIds: opt.judgeIds });
+    if (pages.some(function (p) { return p.blank; })) warn.push('조편성 전인 날은 1~60번 빈 칸으로 나왔어요.');
+    var sheets = pages.map(function (P) {
+      var nm = (P.date.slice(5).replace('-', '.') + ' ' + (P.judge.name || P.groups) + (P.pages > 1 ? ' (' + P.page + ')' : '')).replace(/[\[\]:*?\/\\]/g, ' ').trim().slice(0, 90), k = nm, i = 2;
+      while (used[k]) k = nm + ' ' + (i++); used[k] = 1;
+      return { name: k, fields: { 라운드: rname(cfg, round), 부문: P.groups, 구분: '', 조: '', 날짜: mdw(P.date), 심사위원: P.judge.name || '', 인원: P.count ? P.count + '명' : '', 쪽: P.pages > 1 ? '(' + P.page + '/' + P.pages + '쪽)' : '', 도착: P.arrive ? P.arrive + ' 도착' : '' }, rows: pageRows(P.slots) };
+    });
+    return { sheets: sheets, warn: warn, headers: [['경연순번', '번호1'], ['판정(O·X)', ''], ['메모', '메모1'], ['', ''], ['경연순번', '번호2'], ['판정(O·X)', ''], ['메모', '메모2']] };
+  }
   function scoreSheets(L, opt, ox) {
     var used = {}, round = opt.round || (ox ? 'R1' : 'R2'), cfg = L.cfg || {}, sheets = [];
     sesOf(L, { round: round, groupKey: opt.groupKey, sessionIds: opt.sessionIds, dates: opt.dates }).forEach(function (x) {
@@ -245,6 +310,14 @@ var FM = (function () {
     return { pages: pages };
   }
 
+  // 벽보용: 한 장 = 줄 목록 (구글 문서는 Apps Script가 바로 만들고, 워드는 DF.linesDocx)
+  function timetableWall(L, opt) {
+    if (!T || !T.wallPages) throw new Error('시간표 모듈(TT)이 없습니다');
+    var cfg = L.cfg || {}, list = opt.sessions || sesOf(L, { round: opt.round, dates: opt.dates });
+    var pages = T.wallPages(T.buildDays(list, L.plan || []), { title: title(cfg), r1Name: cfg.r1Name, r2Name: cfg.r2Name }, { split: opt.split !== false });
+    return { pages: pages.map(function (p) { return { fields: { 날짜: p.bookmark }, lines: p.lines }; }) };
+  }
+
   /* ========== 공문·확인서 ========== */
   function honorOf(recipient) {
     var r = s(recipient);
@@ -291,6 +364,12 @@ var FM = (function () {
   function divisionsOf(P) {
     var o = []; Object.keys(P.rounds).forEach(function (r) { P.rounds[r].divisions.forEach(function (d) { if (o.indexOf(d) < 0) o.push(d); }); }); return o;
   }
+  // 하루하루 심사비 (판단 근거: 명단의 종일/반나절 · 설정의 심사비 단가표). 옛 데이터면 1일 심사비 × 일수
+  function dayList(L, P) {
+    if (P.dayInfo && P.dayInfo.length) return P.dayInfo;
+    var fee = +(L.cfg || {}).judgeFee || 0;
+    return (P.days || []).map(function (d) { return { date: d, shift: '', fee: fee }; });
+  }
   function staffOf(L, id) { return (L.staff || []).filter(function (x) { return x.staffId === id; })[0] || {}; }
   function judgeCert(L, opt) {
     var people = judgePeople(L, opt), nos = numbers(L, '확인서', opt.date || today(L), people.length, opt.startNo);
@@ -300,13 +379,14 @@ var FM = (function () {
     }) };
   }
   function judgeRequest(L, opt) {
-    var cfg = L.cfg || {}, people = judgePeople(L, opt), nos = numbers(L, '공문', opt.date || today(L), people.length, opt.startNo), fee = +cfg.judgeFee || 0;
+    var cfg = L.cfg || {}, people = judgePeople(L, opt), nos = numbers(L, '공문', opt.date || today(L), people.length, opt.startNo);
     return { pages: people.map(function (P, i) {
-      var st = staffOf(L, P.staffId), days = P.days, aff = P.affiliation || st.affiliation || '';
-      var dayStr = days.map(function (d, j) { var x = pd(d); return (j && pd(days[j - 1]).getMonth() === x.getMonth() ? x.getDate() + '일' : md(d)) + '(종일)'; }).join(', ');
+      var st = staffOf(L, P.staffId), aff = P.affiliation || st.affiliation || '', di = dayList(L, P);
+      var dayStr = di.map(function (x, j) { var d = pd(x.date); return (j && pd(di[j - 1].date).getMonth() === d.getMonth() ? d.getDate() + '일' : md(x.date)) + '(' + (x.shift || '종일') + ')'; }).join(', ');
+      var total = di.reduce(function (a, x) { return a + (+x.fee || 0); }, 0);
       return { fields: { 문서번호: nos[i], 제목: title(cfg) + ' 심사 요청', 수신: s(st.orgHead) || (aff ? aff + '장' : ''), 참조: '담당자', 기관명: aff, 호칭: s(st.title) || '교수',
           심사대상: divisionsOf(P).join(', ') + ' 부문 참가자', 심사일시: dayStr, 심사위원: P.name + '님',
-          심사비: fee ? manwon(fee * days.length) + (days.length > 1 ? ' [' + days.map(function (d) { return md(d) + '(' + manwon(fee) + ')'; }).join(', ') + ']' : '') : '' },
+          심사비: total ? manwon(total) + (di.length > 1 ? ' [' + di.map(function (x) { return md(x.date) + '(' + manwon(x.fee) + ')'; }).join(', ') + ']' : '') : '' },
         register: { kind: 'judge_request', series: '공문', docNo: nos[i], title: '심사 요청 공문 — ' + aff + ' (' + P.name + ')', target: aff, refId: P.staffId || P.key } };
     }) };
   }
@@ -420,15 +500,15 @@ var FM = (function () {
     return { generic: true, sheets: sheets };
   }
   function payJudge(L, opt) {
-    var cfg = L.cfg || {}, fee = +cfg.judgeFee || 0, tot = { a: 0, t: 0, l: 0, n: 0 };
+    var cfg = L.cfg || {}, tot = { a: 0, t: 0, l: 0, n: 0 };
     var rows = judgePeople(L, opt).map(function (P) {
-      var st = staffOf(L, P.staffId), amt = fee * P.days.length, w = K.withholding(amt, 'judge', cfg);
+      var st = staffOf(L, P.staffId), amt = dayList(L, P).reduce(function (a, x) { return a + (+x.fee || 0); }, 0), w = K.withholding(amt, 'judge', cfg);
       tot.a += w.amount; tot.t += w.tax; tot.l += w.local; tot.n += w.net;
       return [P.name, P.affiliation, daysText(L, P), P.days.length, w.amount, w.tax, w.local, w.net, s(st.bank), s(st.accountMask), s(st.holder), s(st.rrnMask), st.submittedAt ? '제출' : st.staffId ? '미제출' : '명단만'];
     });
     rows.push(['합계', '', '', '', tot.a, tot.t, tot.l, tot.n, '', '', '', '', '']);
     return { generic: true, sheets: [{ name: '심사비', title: title(cfg) + ' 심사비 지급명세', head: ['성명', '소속', '심사일', '일수', '심사비', '소득세', '지방소득세', '실지급액', '은행', '계좌(가림)', '예금주', '주민번호(가림)', '정보'],
-      rows: rows, note: '1일 ' + won(fee) + '원 · 기타소득(일시적 인적용역) 필요경비 ' + cfg.taxJudgeExpense + '% 적용, 기타소득금액 ' + won(cfg.taxMinIncome) + '원 이하 과세하지 않음' }], fullKeys: { 9: 'accountEnc', 11: 'rrnEnc' }, refs: judgePeople(L, opt).map(function (P) { return staffOf(L, P.staffId); }) };
+      rows: rows, note: (s(cfg.judgeRates) ? '심사비 단가: ' + s(cfg.judgeRates).replace(/=(\d+)/g, function (m, v) { return ' ' + manwon(+v); }) : '1일 ' + won(cfg.judgeFee) + '원') + ' · 기타소득(일시적 인적용역) 필요경비 ' + cfg.taxJudgeExpense + '% 적용, 기타소득금액 ' + won(cfg.taxMinIncome) + '원 이하 과세하지 않음' }], fullKeys: { 9: 'accountEnc', 11: 'rrnEnc' }, refs: judgePeople(L, opt).map(function (P) { return staffOf(L, P.staffId); }) };
   }
   function payPrize(L, opt) {
     var cfg = L.cfg || {}, groups = {}, prizes = {}, tot = { a: 0, t: 0, l: 0, n: 0 }, refs = [];
@@ -466,12 +546,13 @@ var FM = (function () {
     switch (kind) {
       case 'att_group': part = attGroup(L, opt); break;
       case 'att_perf': part = attPerf(L, opt); break;
-      case 'score_ox': part = scoreSheets(L, opt, true); break;
+      case 'score_ox': part = scoreOx(L, opt); break;
       case 'score_rank': part = scoreSheets(L, opt, false); break;
       case 'pieces': part = piecesSheet(L, opt); break;
       case 'staff_att': part = staffAtt(L, opt); break;
       case 'tt_public': part = timetable(L, opt, false); break;
       case 'tt_ops': part = timetable(L, opt, true); break;
+      case 'tt_wall': part = timetableWall(L, opt); break;
       case 'gonggyeol': part = gonggyeol(L, opt); break;
       case 'judge_request': part = judgeRequest(L, opt); break;
       case 'judge_cert': part = judgeCert(L, opt); break;
@@ -490,7 +571,7 @@ var FM = (function () {
     if (opt.edits && part.pages) Object.keys(opt.edits).forEach(function (i) { var pg = part.pages[+i]; if (pg) { var e = opt.edits[i]; for (var k in e) pg.fields[k] = e[k]; if (pg.register && e.문서번호 != null) pg.register.docNo = e.문서번호; if (pg.register && e.번호 != null) pg.register.docNo = e.번호; } });
     var count = part.pages ? part.pages.length : (part.sheets || []).length;
     var cfg = L.cfg || {}, stamp = (opt.date || today(L)).replace(/-/g, '').slice(2);
-    var out = { key: kind, cat: F.cat, type: F.type, generic: !!F.generic || !!part.generic, file: F.file || '', name: F.name, title: title(cfg) + ' ' + F.name + (opt.round ? ' (' + rname(cfg, opt.round) + ')' : '') + ' ' + stamp,
+    var out = { key: kind, cat: F.cat, type: F.type, lines: !!F.lines, generic: !!F.generic || !!part.generic, file: F.file || '', name: F.name, title: title(cfg) + ' ' + F.name + (opt.round ? ' (' + rname(cfg, opt.round) + ')' : '') + ' ' + stamp,
       fields: base, pages: part.pages, sheets: part.sheets, headers: part.headers, warn: part.warn || [], count: count, fullKeys: part.fullKeys, refs: part.refs };
     if (F.type === 'doc' && /^(judge_cert|award_cert|award_cert_en|gonggyeol|judge_request|contract|pledge|judge_agree)$/.test(kind)) {
       var cf = cfg.sealOverlay === 'N' ? { w: +cfg.sealSizeMm || 21, h: +cfg.sealSizeMm || 21 } : { w: +cfg.sealSizeMm || 21, h: +cfg.sealSizeMm || 21, overlay: true, dx: +cfg.sealDxMm || -14, dy: +cfg.sealDyMm || -6 };
@@ -507,12 +588,12 @@ var FM = (function () {
       if (sh.head) return { name: sh.name, aoa: [[sh.title || data.title]].concat(sh.note ? [[sh.note]] : []).concat([[]]).concat([sh.head]).concat(sh.rows) };
       var f = {}; for (var k in data.fields) f[k] = data.fields[k]; for (k in sh.fields) f[k] = sh.fields[k];
       var head = (data.headers || []).map(function (h) { return h[0]; });
-      var info = [f.부문, f.구분, f.조, f.날짜, f.시작시간 ? f.시작시간 + '~' + f.종료시간 : ''].filter(Boolean).join('  ');
+      var info = [f.부문, f.구분, f.조, f.날짜, f.시작시간 ? f.시작시간 + '~' + f.종료시간 : '', f.심사위원 ? '심사위원 ' + f.심사위원 : '', f.쪽].filter(Boolean).join('  ');
       return { name: sh.name, aoa: [[f.대회명 + ' ' + (f.라운드 || '') + ' ' + data.name], [info], []].concat([head]).concat(sh.rows.map(function (r) { return (data.headers || []).map(function (h) { return h[1] ? r[h[1]] || '' : ''; }); })) };
     });
   }
 
-  return { FORMS: FORMS, build: build, toAOA: toAOA, nextNo: nextNo, numbers: numbers, fmtNo: fmtNo, period: period, common: common, winners: winners,
+  return { FORMS: FORMS, build: build, toAOA: toAOA, judgeDayPages: judgeDayPages, pageRows: pageRows, nextNo: nextNo, numbers: numbers, fmtNo: fmtNo, period: period, common: common, winners: winners,
     koDate: koDate, koDateW: koDateW, md: md, mdw: mdw, dot: dot, birthDot: birthDot, fullBirth: fullBirth, spaced: spaced, won: won, hm: hm, phoneFmt: phoneFmt,
     setDeps: function (k, t) { K = k || K; T = t || T; } };
 })();

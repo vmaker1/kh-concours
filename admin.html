@@ -28,6 +28,47 @@
   .mlist { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
   .ntv { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-top: 6px; font-size: 15px; line-height: 1.7; max-height: 60vh; overflow: auto; background: #fff; }
   .ntv p { margin: 0; } .ntv table { width: auto; margin: 6px 0; } .ntv td, .ntv th { border: 1px solid #999; padding: 4px 10px; }
+  .kpi .kd { display: block; color: var(--sub); font-size: 12.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .kpi.warnk { background: var(--warn-soft); }
+  .dtab tr.sub td { background: var(--panel); color: var(--sub); }
+  .bars { display: grid; gap: 7px; }
+  .hb { display: grid; grid-template-columns: 92px 1fr 46px 40px; gap: 8px; align-items: center; font-size: 14px; }
+  .hb .lab { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hb .lab em { font-style: normal; font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0 3px; }
+  .hb .trk { position: relative; height: 14px; background: var(--panel); border-radius: 4px; }
+  .hb .trk i { position: absolute; left: 0; top: 0; bottom: 0; background: #b7adb2; border-radius: 0 4px 4px 0; min-width: 2px; }
+  .hb.on .trk i { background: var(--accent); }
+  .hb .trk u { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); margin-left: -1px; }
+  .hb b { text-align: right; font-variant-numeric: tabular-nums; }
+  .hb small { text-align: right; color: var(--sub); font-variant-numeric: tabular-nums; }
+  .att table { width: 100%; table-layout: fixed; font-size: 12pt; }
+  .att td { padding: 0 2mm; vertical-align: middle; }
+  .att .af { display: flex; justify-content: space-between; margin-top: 3mm; font-size: 11pt; }
+  .jsh h1 { font-size: 16pt; margin: 0 0 1.5mm; }
+  .jsh .meta { margin-bottom: 2mm; font-size: 10.5pt; }
+  .jsh .jn { display: flex; justify-content: space-between; font-size: 11.5pt; margin: 0 0 2.5mm; }
+  .jsh .two { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+  .jsh table.ox { width: 100%; border-collapse: collapse; font-size: 10pt; table-layout: fixed; }
+  .jsh table.ox th { padding: 1mm; font-size: 8.5pt; line-height: 1.15; }
+  .jsh table.ox td { height: 7.5mm; padding: 0 1.2mm; }
+  .jsh table.ox td.mk { font-size: 7.5pt; color: #333; white-space: nowrap; overflow: hidden; }
+  .jsh .nt { font-size: 8.5pt; margin: 2mm 0 0; }
+  .dgrid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; align-items: start; }
+  .dgrid.half { grid-template-columns: 1fr 1fr; }
+  .dgrid > .card { margin: 0; }
+  @media (max-width: 860px) { .dgrid, .dgrid.half { grid-template-columns: 1fr; } }
+  .tw { position: relative; }
+  .tw svg { width: 100%; height: auto; display: block; }
+  .tw .gl { stroke: var(--line); stroke-width: 1; }
+  .tw .ax { font-size: 11px; fill: var(--sub); }
+  .tw .lna { fill: none; stroke: var(--accent); stroke-width: 2.25; stroke-linejoin: round; }
+  .tw .lnb { fill: none; stroke: #8f878c; stroke-width: 2; stroke-dasharray: 5 4; stroke-linejoin: round; }
+  .tw .dl { font-size: 12px; fill: var(--sub); font-variant-numeric: tabular-nums; } .tw .dl.b { fill: var(--ink); font-weight: 700; }
+  .tw .xh { stroke: var(--ink); stroke-width: 1; opacity: .35; }
+  .tw .ttp { position: absolute; top: 4px; width: 190px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.08); pointer-events: none; }
+  .tlg { display: flex; gap: 14px; font-size: 13px; color: var(--sub); margin-bottom: 4px; }
+  .tlg i, .ttp i { display: inline-block; width: 16px; height: 0; border-top: 2.5px solid var(--accent); vertical-align: middle; margin-right: 5px; }
+  .tlg i.lb, .ttp i.lb { border-top: 2px dashed #8f878c; }
 </style>
 </head>
 <body>
@@ -45,14 +86,17 @@
 <script src="docfill.js"></script>
 <script src="crypto.js"></script>
 <script src="admin-docs.js"></script>
+<script src="judgelist.js"></script>
 <script>
 {
 const { $, $$, esc, api, toast, modal, confirmBox, busy, fmtDate, fmtBirth } = App;
 App.demoBar();
 const app = $('#app');
-const TABS = [['dash', '현황'], ['people', '참가자'], ['pay', '입금대조'], ['plan', '시간표'], ['sched', '조편성'], ['print', '출석부·인쇄'], ['judges', '심사위원'], ['results', '채점결과'], ['notice', '공지'], ['docs', '문서·출력'], ['staff', '인력·지급'], ['settings', '설정']];
+const TABS_ALL = [['dash', '현황'], ['people', '참가자'], ['pay', '입금대조'], ['plan', '시간표'], ['sched', '조편성'], ['print', '출석부·인쇄'], ['judges', '심사위원'], ['results', '채점결과'], ['notice', '공지'], ['docs', '문서·출력'], ['staff', '인력·지급'], ['settings', '설정']];
+// 가상계좌(기본)면 입금대조 탭은 숨김 — 설정 payMode=match 로 바꾸면 다시 보임
+const TABS_NOW = () => TABS_ALL.filter(t => t[0] !== 'pay' || (D && D.cfg && D.cfg.payMode === 'match'));
 let D = null, TAB = (location.hash || '#dash').slice(1), ROUND = 'R1', RES_GROUP = null, PFILTER = { q: '', g: '', pay: '' };
-if (!TABS.some(t => t[0] === TAB)) TAB = 'dash';
+if (!TABS_ALL.some(t => t[0] === TAB)) TAB = 'dash';
 
 const isPaid = p => KC.isPaid(p), isActive = p => KC.isActive(p);
 const PT = (p, r) => KC.piecesText(KC.piecesFor(p, r));           // 곡목 한 줄 텍스트
@@ -68,7 +112,7 @@ function load() {
 function shell() {
   app.innerHTML = '<header class="top"><div class="wrap"><div class="brand">' + esc(D.cfg.title) + '<small>운영 관리</small></div><span class="sp"></span>' +
     '<a class="btn sm" href="index.html" target="_blank" rel="noopener">참가자 조회</a><a class="btn sm" href="desk.html" target="_blank" rel="noopener">현장</a><a class="btn sm" href="judge.html" target="_blank" rel="noopener">심사위원</a><button class="sm" id="rl">새로고침</button><button class="sm" id="lo">나가기</button></div></header>' +
-    '<main class="wrap" style="padding-top:8px;padding-bottom:60px"><nav class="tabs" role="tablist">' + TABS.map(t => '<button data-t="' + t[0] + '" class="' + (t[0] === TAB ? 'on' : '') + '">' + t[1] + '</button>').join('') + '</nav><div id="view"></div></main>';
+    '<main class="wrap" style="padding-top:8px;padding-bottom:60px"><nav class="tabs" role="tablist">' + TABS_NOW().map(t => '<button data-t="' + t[0] + '" class="' + (t[0] === TAB ? 'on' : '') + '">' + t[1] + '</button>').join('') + '</nav><div id="view"></div></main>';
   $$('[data-t]').forEach(b => b.addEventListener('click', () => { TAB = b.dataset.t; location.hash = TAB; JDRAFT = null; load(); }));
   $('#rl').addEventListener('click', () => load().then(() => toast('최신 데이터로 불러왔어요')));
   $('#lo').addEventListener('click', () => { App.setToken('admin', null); needLogin(); });
@@ -80,37 +124,155 @@ const refresh = () => load();
 window.ADM = { get D() { return D; }, call, load, refresh, view, onErr, rname, GL };
 
 /* ================= 현황 ================= */
+// 숫자만 보는 화면. 전년 자료(Config.prevStats)는 전년 신청자 엑셀에서 인원 수만 뽑아 둔 것 — 이름·연락처는 없음
+const nf = n => (+n || 0).toLocaleString('ko-KR');
+function prevStats() { try { return D.cfg.prevStats ? JSON.parse(D.cfg.prevStats) : null; } catch (e) { return null; } }
+function deltaTxt(cur, prev) {
+  if (prev == null) return '';
+  const d = cur - prev, pc = prev ? Math.round(d / prev * 1000) / 10 : 0;
+  return '전년 ' + nf(prev) + ' · ' + (d > 0 ? '▲' + nf(d) : d < 0 ? '▼' + nf(-d) : '같음') + (prev && d ? ' (' + (d > 0 ? '+' : '') + pc + '%)' : '');
+}
+const GRADE_ORDER = ['초1', '초2', '초3', '초4', '초5', '초6', '초 졸업', '중1', '중2', '중3', '중 졸업', '고1', '고2', '고3', '고 졸업', '대학·일반1', '대학·일반2', '대학·일반3', '대학·일반4', '대학·일반 졸업', '대학·일반'];
 function dash() {
-  const P = D.participants.filter(isActive), cnt = (f) => P.filter(f).length;
-  const e1 = D.entries.filter(e => e.round === 'R1'), e2 = D.entries.filter(e => e.round === 'R2');
-  const res1 = Object.values(D.results.R1), done1 = res1.reduce((a, g) => a + g.completed, 0), tot1 = res1.reduce((a, g) => a + g.total, 0);
-  const rows = D.groupKeys.map(k => {
-    const ps = P.filter(p => p.groupKey === k), pk = new Set(ps.map(p => p.id));
-    const r1 = e1.filter(e => pk.has(e.pid)), r2 = e2.filter(e => pk.has(e.pid));
-    return { k, n: ps.length, paid: ps.filter(isPaid).length, s1: D.sessions.filter(s => s.round === 'R1' && s.groupKey === k).length, r1: r1.length, att: r1.filter(e => e.attend === 'Y').length, pass: r1.filter(e => e.pass === 'Y').length, r2: r2.length };
+  const cfg = D.cfg, S = KC.applicantStats(cfg, D.participants), PV = prevStats();
+  const kpi = (label, v, pv, cls, sub) => '<div class="kpi ' + (cls || '') + '"><b>' + nf(v) + '</b><span>' + esc(label) + '</span>' + (sub ? '<small class="kd">' + esc(sub) + '</small>' : '') + (PV && pv != null ? '<small class="kd">' + esc(deltaTxt(v, pv)) + '</small>' : '') + '</div>';
+  const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '';
+  // 부문 × 구분
+  const keys = D.groupKeys.slice(); if (PV) Object.keys(PV.groups || {}).forEach(k => { if (!keys.includes(k)) keys.push(k); });
+  const gsort = {}; D.groups.forEach(g => { const d = g.groupKey.split('|')[0], v = +g.sort || 999; gsort[d] = Math.min(gsort[d] || 999, v); });
+  keys.sort((a, b) => (gsort[a.split('|')[0]] || 999) - (gsort[b.split('|')[0]] || 999) || KC.groupKeyCmp(a, b));
+  const divs = []; keys.forEach(k => { const d = k.split('|')[0]; if (!divs.includes(d)) divs.push(d); });
+  const Z = { n: 0, paid: 0, wait: 0, m: 0, f: 0, far: 0 }, add = (a, b) => { Object.keys(Z).forEach(f => a[f] += (b && b[f]) || 0); return a; };
+  const line = (cls, a, b, G, pg) => '<tr class="' + cls + '"><td>' + a + '</td><td>' + b + '</td><td class="n"><b>' + nf(G.n) + '</b></td><td class="n">' + nf(G.paid) + '</td><td class="n">' + (G.wait ? nf(G.wait) : '') + '</td><td class="n">' + (G.m || '') + '</td><td class="n">' + (G.f || '') + '</td><td class="n">' + (G.far || '') + '</td>' +
+    (PV ? '<td class="n muted">' + (pg ? nf(pg.n) : '') + '</td><td class="n">' + (pg ? dTxt(G.n - pg.n) : '') + '</td>' : '') + '</tr>';
+  const dTxt = d => d > 0 ? '▲' + d : d < 0 ? '▼' + (-d) : '–';
+  let body = '', TT = Object.assign({}, Z), TP = PV ? Object.assign({}, Z) : null;
+  divs.forEach(dv => {
+    const ks = keys.filter(k => k.split('|')[0] === dv), sub = Object.assign({}, Z), psub = Object.assign({}, Z);
+    ks.forEach((k, i) => {
+      const G = S.groups[k] || Z, pg = PV ? (PV.groups || {})[k] : null;
+      add(sub, G); if (pg) add(psub, pg);
+      body += line('', i ? '' : '<b>' + esc(dv) + '</b>', esc(k.split('|')[1] || ''), G, PV ? (pg || Z) : null);
+    });
+    if (ks.length > 1) body += line('sub', '', '소계', sub, PV ? psub : null);
+    add(TT, sub); if (TP) add(TP, psub);
   });
-  const sum = f => rows.reduce((a, r) => a + r[f], 0);
-  view().innerHTML = '<div class="grid g4" style="margin-bottom:20px">' +
-    '<div class="kpi hl"><b>' + P.length + '</b><span>신청 (취소 제외)</span></div>' +
-    '<div class="kpi"><b>' + cnt(isPaid) + '</b><span>입금 확인</span></div>' +
-    '<div class="kpi"><b>' + cnt(p => !isPaid(p)) + '</b><span>미입금</span></div>' +
-    '<div class="kpi"><b>' + e1.length + '</b><span>' + esc(rname('R1')) + ' 편성</span></div>' +
-    '<div class="kpi"><b>' + e1.filter(e => e.attend === 'Y').length + '</b><span>' + esc(rname('R1')) + ' 출석</span></div>' +
-    '<div class="kpi"><b>' + (tot1 ? Math.round(done1 / tot1 * 100) : 0) + '%</b><span>' + esc(rname('R1')) + ' 채점 완료</span></div>' +
-    '<div class="kpi"><b>' + e1.filter(e => e.pass === 'Y').length + '</b><span>' + esc(rname('R2')) + ' 진출</span></div></div>' +
-    '<div class="card"><h2>부문별 인원</h2><div class="scroll"><table class="gtab"><thead><tr><th>부문</th><th>구분</th><th class="n">신청</th><th class="n">입금확인</th><th class="n">미입금</th><th class="n">' + esc(rname('R1')) + ' 조</th><th class="n">편성</th><th class="n">출석</th><th class="n">' + esc(rname('R2')) + ' 진출</th><th class="n">' + esc(rname('R2')) + ' 편성</th></tr></thead><tbody>' +
-    rows.map(r => { const [a, b] = r.k.split('|'); return '<tr><td><b>' + esc(a) + '</b></td><td>' + esc(b) + '</td><td class="n">' + r.n + '</td><td class="n">' + r.paid + '</td><td class="n">' + (r.n - r.paid || '') + '</td><td class="n">' + (r.s1 || '') + '</td><td class="n">' + (r.r1 || '') + '</td><td class="n">' + (r.att || '') + '</td><td class="n">' + (r.pass || '') + '</td><td class="n">' + (r.r2 || '') + '</td></tr>'; }).join('') +
-    '<tr class="hl"><td colspan="2"><b>합계</b></td><td class="n"><b>' + sum('n') + '</b></td><td class="n">' + sum('paid') + '</td><td class="n">' + (sum('n') - sum('paid')) + '</td><td class="n">' + sum('s1') + '</td><td class="n">' + sum('r1') + '</td><td class="n">' + sum('att') + '</td><td class="n">' + sum('pass') + '</td><td class="n">' + sum('r2') + '</td></tr>' +
-    '</tbody></table></div><div class="row end" style="margin-top:12px"><button id="xcnt">인원 현황 엑셀</button></div></div>' +
-    (D.participants.length ? '' : '<div class="note" style="margin-top:16px">아직 참가자가 없어요. <b>참가자</b> 탭에서 홈페이지 신청자 엑셀을 불러오세요.</div>');
-  $('#xcnt').addEventListener('click', () => App.writeXlsx([{ name: '부문별 인원', rows: [['부문', '구분', '신청', '입금확인', '미입금', '예선 조', '예선 편성', '출석', '본선 진출', '본선 편성']].concat(rows.map(r => { const [a, b] = r.k.split('|'); return [a, b, r.n, r.paid, r.n - r.paid, r.s1, r.r1, r.att, r.pass, r.r2]; })) }], '부문별인원_' + App.today() + '.xlsx'));
+  body += line('hl', '<b>합계</b>', '', TT, TP);
+  // 진행 (조편성 후)
+  const live = new Set(D.participants.filter(isActive).map(p => p.id));
+  const e1 = D.entries.filter(e => e.round === 'R1' && live.has(e.pid)), e2 = D.entries.filter(e => e.round === 'R2' && live.has(e.pid));
+  const res1 = Object.values(D.results.R1 || {}), done1 = res1.reduce((a, g) => a + g.completed, 0), tot1 = res1.reduce((a, g) => a + g.total, 0);
+  const P = D.participants.filter(isActive);
+  const prog = (e1.length || e2.length) ? (() => {
+    const rows = keys.filter(k => D.groupKeys.includes(k)).map(k => {
+      const pk = new Set(P.filter(p => p.groupKey === k).map(p => p.id)), r1 = e1.filter(e => pk.has(e.pid)), r2 = e2.filter(e => pk.has(e.pid));
+      return { k, s1: D.sessions.filter(s => s.round === 'R1' && s.groupKey === k).length, r1: r1.length, att: r1.filter(e => e.attend === 'Y').length, pass: r1.filter(e => e.pass === 'Y').length, r2: r2.length };
+    });
+    const sm = f => rows.reduce((a, r) => a + r[f], 0);
+    return '<div class="grid g4" style="margin:4px 0 16px">' + kpi(rname('R1') + ' 편성', e1.length) + kpi(rname('R1') + ' 출석', e1.filter(e => e.attend === 'Y').length) +
+      '<div class="kpi"><b>' + (tot1 ? Math.round(done1 / tot1 * 100) : 0) + '%</b><span>' + esc(rname('R1')) + ' 채점 완료</span></div>' + kpi(rname('R2') + ' 진출', e1.filter(e => e.pass === 'Y').length) + '</div>' +
+      '<div class="scroll"><table class="gtab"><thead><tr><th>부문</th><th>구분</th><th class="n">' + esc(rname('R1')) + ' 조</th><th class="n">편성</th><th class="n">출석</th><th class="n">' + esc(rname('R2')) + ' 진출</th><th class="n">' + esc(rname('R2')) + ' 편성</th></tr></thead><tbody>' +
+      rows.map(r => { const [a, b] = r.k.split('|'); return '<tr><td><b>' + esc(a) + '</b></td><td>' + esc(b) + '</td><td class="n">' + (r.s1 || '') + '</td><td class="n">' + (r.r1 || '') + '</td><td class="n">' + (r.att || '') + '</td><td class="n">' + (r.pass || '') + '</td><td class="n">' + (r.r2 || '') + '</td></tr>'; }).join('') +
+      '<tr class="hl"><td colspan="2"><b>합계</b></td><td class="n">' + sm('s1') + '</td><td class="n">' + sm('r1') + '</td><td class="n">' + sm('att') + '</td><td class="n">' + sm('pass') + '</td><td class="n">' + sm('r2') + '</td></tr></tbody></table></div>';
+  })() : '';
+  // 분포
+  const farSet = new Set(String(cfg.farRegions || '').split(/[,\s]+/).filter(Boolean));
+  const regs = Object.keys(Object.assign({}, S.regions, PV ? PV.regions : {})).sort((a, b) => (S.regions[b] || 0) - (S.regions[a] || 0) || ((PV && PV.regions[b]) || 0) - ((PV && PV.regions[a]) || 0));
+  const grs = Object.keys(Object.assign({}, S.grades, PV ? PV.grades : {})).sort((a, b) => { const ia = GRADE_ORDER.indexOf(a), ib = GRADE_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || KC.cmpKo(a, b); });
+  const bars = (list, cur, prev, tag) => { const mx = Math.max(1, ...list.map(k => Math.max(cur[k] || 0, (prev && prev[k]) || 0))); return '<div class="bars">' + list.map(k => { const v = cur[k] || 0, pv = prev ? prev[k] || 0 : null, t = tag ? tag(k) : ''; return '<div class="hb' + (t ? ' on' : '') + '" title="' + esc(k + ' ' + v + '명' + (pv != null ? ' · 전년 ' + pv + '명' : '')) + '"><span class="lab">' + esc(k) + (t ? ' <em>' + t + '</em>' : '') + '</span><span class="trk"><i style="width:' + (v / mx * 100) + '%"></i>' + (pv != null ? '<u style="left:' + (pv / mx * 100) + '%"></u>' : '') + '</span><b>' + nf(v) + '</b>' + (pv != null ? '<small>' + nf(pv) + '</small>' : '') + '</div>'; }).join('') + '</div>'; };
+  const PVBOX = (PV ? '<p><b>' + esc(PV.label || '전년') + '</b> · 신청 ' + nf(PV.active) + '명 (환불·취소 ' + nf(PV.cancel) + '명 별도) · 접수 ' + esc(PV.first) + ' ~ ' + esc(PV.last) + '</p><p class="small muted">인원 수만 저장돼 있어요. 이름·연락처·생년월일 같은 개인정보는 남기지 않았어요.</p><div class="row"><label class="btn" style="cursor:pointer">다른 파일로 바꾸기<input type="file" id="pvf" accept=".xlsx,.xls,.csv" hidden></label><button class="ghost danger" id="pvx">지우기</button></div>'
+        : '<p>작년 홈페이지 신청자 엑셀(올해와 같은 양식)을 올리면 부문별 인원·지역·학년·접수 추이를 전년과 나란히 보여 줘요.</p><p class="small muted">파일에서 인원 수만 뽑아 저장하고, 이름·연락처 같은 개인정보는 저장하지 않아요.</p><label class="btn pri" style="cursor:pointer">전년 신청자 엑셀 올리기<input type="file" id="pvf" accept=".xlsx,.xls,.csv" hidden></label>');
+  const legendPrev = PV ? '<p class="small muted" style="margin:6px 0 0">막대 = 올해 · 세로 눈금과 오른쪽 작은 숫자 = ' + esc(PV.label || '전년') + '</p>' : '';
+  view().innerHTML =
+    '<div class="grid g4" style="margin-bottom:8px">' +
+      kpi('신청 (취소·환불 제외)', S.active, PV && PV.active, 'hl') +
+      kpi('입금 확인', S.paid, PV && PV.paid, '', S.active ? '신청의 ' + pct(S.paid, S.active) : '') +
+      kpi('입금 대기', S.wait, PV && PV.wait, S.wait ? 'warnk' : '', cfg.payMode === 'match' ? '통장 대조 전' : '가상계좌 미입금') +
+      kpi('환불·취소', S.cancel, PV && PV.cancel) +
+      kpi('지방 참가자', S.far, PV && PV.far, '', '오후 조 우선 배정 대상') + '</div>' +
+    (S.total ? '' : '<div class="note" style="margin:12px 0">아직 참가자가 없어요. <b>참가자</b> 탭에서 홈페이지 신청자 엑셀을 불러오면 여기 숫자가 채워져요.' + (PV ? '' : ' 아래 <b>전년 자료</b>에 작년 파일을 넣어 두면 올해 접수가 시작될 때 바로 비교돼요.') + '</div>') +
+    '<div class="card" style="margin-top:16px"><div class="row"><h2 style="margin:0">부문별 신청 현황</h2><span class="sp"></span>' + (S.first ? '<span class="small muted">접수 ' + esc(S.first) + ' ~ ' + esc(S.last) + ' · 남 ' + nf(S.male) + ' / 여 ' + nf(S.female) + '</span>' : '') + '</div>' +
+      '<div class="scroll" style="margin-top:10px"><table class="gtab dtab"><thead><tr><th>부문</th><th>구분</th><th class="n">신청</th><th class="n">입금 확인</th><th class="n">입금 대기</th><th class="n">남</th><th class="n">여</th><th class="n">지방</th>' + (PV ? '<th class="n">' + esc(PV.label || '전년') + '</th><th class="n">증감</th>' : '') + '</tr></thead><tbody>' + body + '</tbody></table></div>' +
+      '<div class="row end" style="margin-top:12px"><button id="xcnt">현황 엑셀</button></div></div>' +
+    '<div class="dgrid">' +
+      '<div class="card"><h2>신청 추이 <small class="muted" style="font-weight:500;font-size:14px">누적 · 마감일 기준</small></h2><div id="trend"></div></div>' +
+      '<div class="card"><h2>전년 자료</h2>' + PVBOX + '</div></div>' +
+    '<div class="dgrid half">' +
+      '<div class="card"><h2>지역</h2>' + (regs.length ? bars(regs, S.regions, PV && PV.regions, k => farSet.has(k) ? '지방' : '') : '<div class="empty">자료 없음</div>') + legendPrev + '</div>' +
+      '<div class="card"><h2>학년</h2>' + (grs.length ? bars(grs, S.grades, PV && PV.grades) : '<div class="empty">자료 없음</div>') + legendPrev + '</div>' +
+    '</div>' +
+    (prog ? '<div class="card" style="margin-top:16px"><h2>진행 현황</h2>' + prog + '</div>' : '');
+  drawTrend($('#trend'), S, PV);
+  $('#xcnt').addEventListener('click', () => {
+    const g = [['부문', '구분', '신청', '입금 확인', '입금 대기', '남', '여', '지방'].concat(PV ? [PV.label || '전년', '증감'] : [])];
+    keys.forEach(k => { const G = S.groups[k] || Z, pg = PV ? (PV.groups || {})[k] || Z : null; g.push(k.split('|').concat([G.n, G.paid, G.wait, G.m, G.f, G.far]).concat(pg ? [pg.n, G.n - pg.n] : [])); });
+    g.push(['합계', ''].concat([TT.n, TT.paid, TT.wait, TT.m, TT.f, TT.far]).concat(TP ? [TP.n, TT.n - TP.n] : []));
+    const kv = (o, p, ks) => [['구분', '올해'].concat(PV ? [PV.label || '전년'] : [])].concat(ks.map(k => [k, o[k] || 0].concat(PV ? [(p || {})[k] || 0] : [])));
+    const days = Object.keys(Object.assign({}, S.daily)).sort();
+    App.writeXlsx([{ name: '부문별', rows: g }, { name: '지역', rows: kv(S.regions, PV && PV.regions, regs) }, { name: '학년', rows: kv(S.grades, PV && PV.grades, grs) }, { name: '일자별', rows: [['신청일', '신청', '누적']].concat((() => { let c = 0; return days.map(d => [d, S.daily[d], c += S.daily[d]]); })()) }], '신청현황_' + App.today() + '.xlsx');
+  });
+  const pvf = $('#pvf'); if (pvf) pvf.addEventListener('change', e => { if (e.target.files[0]) loadPrevFile(e.target.files[0]); e.target.value = ''; });
+  const pvx = $('#pvx'); if (pvx) pvx.addEventListener('click', () => confirmBox('전년 비교 자료를 지울까요?', '지우기', true).then(ok => ok && call('setConfig', { values: { prevStats: '' } }).then(() => { toast('지웠어요', 'ok'); refresh(); }).catch(onErr)));
+}
+// 누적 신청 곡선 — x: 마감 D-n (올해는 설정의 접수 마감일, 없으면 마지막 신청일), y: 누적 인원
+function drawTrend(el, S, PV) {
+  const dd = (a, b) => Math.round((Date.parse(a + 'T00:00:00') - Date.parse(b + 'T00:00:00')) / 864e5);
+  const series = (st, end) => { if (!st || !st.first) return null; const out = []; let c = 0; Object.keys(st.daily).sort().forEach(d => { c += st.daily[d]; out.push({ x: dd(d, end), d, c, n: st.daily[d] }); }); return out; };
+  const endCur = /^\d{4}-\d{2}-\d{2}$/.test(D.cfg.applyEnd || '') ? D.cfg.applyEnd : S.last;
+  const A = series(S, endCur), B = PV ? series(PV, PV.last) : null;
+  if (!A && !B) { el.innerHTML = '<div class="empty">신청일 자료가 생기면 그려져요.</div>'; return; }
+  const all = (A || []).concat(B || []), x0 = Math.min(...all.map(p => p.x), -7), x1 = Math.max(0, ...all.map(p => p.x)), ymax = Math.max(...all.map(p => p.c), 1);
+  const W = 560, H = 220, L = 40, R = 46, T = 14, Bm = 26, sx = x => L + (x - x0) / Math.max(1, x1 - x0) * (W - L - R), sy = y => T + (1 - y / ymax) * (H - T - Bm);
+  const step = (a) => { const pts = []; let prev = null; a.forEach(p => { if (prev) pts.push([sx(p.x), sy(prev.c)]); pts.push([sx(p.x), sy(p.c)]); prev = p; }); return pts; };
+  const path = a => 'M' + a.map(p => sx(p.x).toFixed(1) + ',' + sy(p.c).toFixed(1)).join('L');
+  const raw = ymax / 4, mag = Math.pow(10, Math.floor(Math.log10(raw || 1))), stp = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= raw) || mag * 10, yt = []; for (let v = 0; v <= ymax; v += stp) yt.push(v);
+  const xt = []; for (let x = 0; x >= x0; x -= (x1 - x0 > 28 ? 7 : 5)) xt.push(x);
+  const curY = (a, x) => { if (!a) return null; let c = 0; a.forEach(p => { if (p.x <= x) c = p.c; }); return a.some(p => p.x <= x) ? c : null; };
+  const labA = 'Y' + (S.year || '올해'), labB = PV ? (PV.label || '전년') : '';
+  el.innerHTML = '<div class="tlg"><span><i class="la"></i>올해' + (S.year ? ' (' + esc(S.year) + ')' : '') + '</span>' + (B ? '<span><i class="lb"></i>' + esc(labB) + '</span>' : '') + '</div>' +
+    '<div class="tw"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="누적 신청 추이">' +
+    yt.map(v => '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + sy(v) + '" y2="' + sy(v) + '" class="gl"/><text x="' + (L - 6) + '" y="' + (sy(v) + 4) + '" text-anchor="end" class="ax">' + nf(v) + '</text>').join('') +
+    xt.map(x => '<text x="' + sx(x) + '" y="' + (H - 8) + '" text-anchor="middle" class="ax">' + (x === 0 ? '마감' : 'D' + x) + '</text>').join('') +
+    (B ? '<path d="' + path(B) + '" class="lnb"/><text x="' + (sx(B[B.length - 1].x) + 6) + '" y="' + (sy(B[B.length - 1].c) + 4) + '" class="dl">' + nf(B[B.length - 1].c) + '</text>' : '') +
+    (A ? '<path d="' + path(A) + '" class="lna"/><text x="' + (sx(A[A.length - 1].x) + 6) + '" y="' + (sy(A[A.length - 1].c) + (B && Math.abs(sy(A[A.length - 1].c) - sy(B[B.length - 1].c)) < 14 ? -8 : 4)) + '" class="dl b">' + nf(A[A.length - 1].c) + '</text>' : '') +
+    '<line class="xh" x1="0" x2="0" y1="' + T + '" y2="' + (H - Bm) + '" style="display:none"/><rect x="' + L + '" y="' + T + '" width="' + (W - L - R) + '" height="' + (H - T - Bm) + '" fill="transparent" class="hit"/></svg><div class="ttp" style="display:none"></div></div>' +
+    (D.cfg.applyEnd ? '' : '<p class="small muted" style="margin:6px 0 0">설정 › 기본의 <b>접수 마감일</b>을 넣으면 접수 중에도 마감 기준으로 정확히 맞춰 비교돼요.</p>');
+  const svg = $('svg', el), hit = $('.hit', el), xh = $('.xh', el), tip = $('.ttp', el);
+  const md = (st, end, x) => { const t = Date.parse(end + 'T00:00:00') + x * 864e5, d = new Date(t); return (d.getMonth() + 1) + '/' + d.getDate(); };
+  const move = ev => {
+    const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) / r.width * W, x = Math.round(x0 + (px - L) / (W - L - R) * (x1 - x0));
+    if (x < x0 || x > x1) return;
+    const a = curY(A, x), b = curY(B, x), da = A && (A.find(p => p.x === x) || {}).n, db = B && (B.find(p => p.x === x) || {}).n;
+    xh.setAttribute('x1', sx(x)); xh.setAttribute('x2', sx(x)); xh.style.display = '';
+    tip.innerHTML = '<b>' + (x === 0 ? '마감일' : '마감 D' + x) + '</b>' + (A ? '<div><i class="la"></i>올해 ' + md(S, endCur, x) + ' · 누적 ' + (a == null ? '–' : nf(a)) + (da ? ' (+' + da + ')' : '') + '</div>' : '') + (B ? '<div><i class="lb"></i>' + esc(labB) + ' ' + md(PV, PV.last, x) + ' · 누적 ' + (b == null ? '–' : nf(b)) + (db ? ' (+' + db + ')' : '') + '</div>' : '');
+    tip.style.display = ''; const left = (sx(x) / W) * r.width; tip.style.left = Math.min(Math.max(0, left - 90), r.width - 190) + 'px';
+  };
+  hit.addEventListener('mousemove', move); hit.addEventListener('touchstart', e => move(e.touches[0]), { passive: true });
+  hit.addEventListener('mouseleave', () => { xh.style.display = 'none'; tip.style.display = 'none'; });
+}
+function loadPrevFile(file) {
+  App.readWorkbook(file).then(sheets => {
+    let sh = sheets[0], hi = -1;
+    for (const s of sheets) { hi = App.findHeaderRow(s.rows, ['이름']); if (hi >= 0) { sh = s; break; } }
+    if (hi < 0) { toast('"이름" 열이 있는 머리글 줄을 찾지 못했어요.', 'bad'); return; }
+    const header = sh.rows[hi].map(x => String(x).trim()), map = App.autoMap(header);
+    const need = ['division', 'category', 'gender', 'payStatus', 'status', 'address', 'address2', 'zip', 'grade', 'appliedAt'];
+    const rows = sh.rows.slice(hi + 1).filter(r => r.some(c => String(c).trim())).map(r => { const o = {}; need.forEach(f => o[f] = map[f] >= 0 ? String(r[map[f]] || '').trim() : ''); o.address = (o.address + ' ' + o.address2).trim(); delete o.address2; return o; }).filter(o => o.division);
+    if (!rows.length) { toast('지원 부문 열을 찾지 못했어요.', 'bad'); return; }
+    const st = KC.applicantStats(D.cfg, rows), cur = KC.applicantStats(D.cfg, D.participants);
+    const m = modal('<h2>전년 비교 자료</h2><p>' + esc(file.name) + '</p><table><tbody><tr><th>접수 기간</th><td>' + esc(st.first) + ' ~ ' + esc(st.last) + '</td></tr><tr><th>신청</th><td>' + nf(st.active) + '명 (환불·취소 ' + nf(st.cancel) + '명 별도)</td></tr><tr><th>입금 확인</th><td>' + nf(st.paid) + '명</td></tr><tr><th>부문</th><td>' + Object.keys(st.divisions).map(d => esc(d) + ' ' + st.divisions[d]).join(' · ') + '</td></tr></tbody></table>' +
+      (cur.year && cur.year === st.year ? '<div class="note warn small" style="margin-top:10px">올해 참가자와 같은 연도(' + esc(st.year) + ') 파일이에요. 전년 파일이 맞는지 확인해 주세요.</div>' : '') +
+      '<label class="f" for="pvl" style="margin-top:12px">비교 이름 (표·그래프에 나와요)</label><input id="pvl" value="' + esc((st.year || '') + '년') + '">' +
+      '<p class="small muted" style="margin-top:8px">부문·지역·학년·신청일별 <b>인원 수만</b> 저장해요. 이름·연락처·생년월일·주소는 저장하지 않아요.</p><div class="row end"><button data-close>취소</button><button class="pri" id="pvs">저장</button></div>');
+    $('#pvs', m.el).addEventListener('click', e => { st.label = $('#pvl', m.el).value.trim() || '전년'; busy(e.target, true); call('setConfig', { values: { prevStats: JSON.stringify(st) } }).then(() => { m.close(); toast('전년 자료를 넣었어요', 'ok'); refresh(); }).catch(err => { busy(e.target, false); onErr(err); }); });
+  }).catch(e => toast('엑셀을 읽지 못했어요: ' + e.message, 'bad'));
 }
 
 /* ================= 참가자 ================= */
 function people() {
   view().innerHTML = '<div class="tb-tools"><label class="btn pri" style="cursor:pointer">신청자 엑셀 불러오기<input type="file" id="imp" accept=".xlsx,.xls,.csv" hidden></label><button id="exp">엑셀로 내보내기</button><button id="add">한 명 추가</button><span class="sp"></span>' +
     '<input id="q" placeholder="이름·접수번호·학교 검색" value="' + esc(PFILTER.q) + '"><select id="g"><option value="">전체 부문</option>' + D.groupKeys.map(k => '<option ' + (PFILTER.g === k ? 'selected' : '') + ' value="' + esc(k) + '">' + esc(GL(k)) + '</option>').join('') + '</select>' +
-    '<select id="pf"><option value="">입금 전체</option><option value="Y" ' + (PFILTER.pay === 'Y' ? 'selected' : '') + '>입금 확인</option><option value="N" ' + (PFILTER.pay === 'N' ? 'selected' : '') + '>미입금</option><option value="X" ' + (PFILTER.pay === 'X' ? 'selected' : '') + '>취소</option></select></div>' +
+    '<select id="pf"><option value="">입금 전체</option><option value="Y" ' + (PFILTER.pay === 'Y' ? 'selected' : '') + '>입금 확인</option><option value="N" ' + (PFILTER.pay === 'N' ? 'selected' : '') + '>입금 대기</option><option value="X" ' + (PFILTER.pay === 'X' ? 'selected' : '') + '>취소</option></select></div>' +
     '<div id="pt"></div>';
   $('#imp').addEventListener('change', e => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ''; });
   $('#exp').addEventListener('click', exportPeople);
@@ -130,7 +292,7 @@ function drawPeople() {
   $('#pt').innerHTML = '<p class="small muted">' + list.length + '명' + (list.length > 400 ? ' (앞의 400명만 표시 — 검색으로 좁혀 주세요)' : '') + '</p>' +
     (list.length ? '<div class="scroll card" style="padding:0;max-height:70vh"><table><thead><tr><th>접수번호</th><th>이름</th><th>생년월일</th><th>부문</th><th class="hide-m">학교·학년</th><th class="hide-m">지역</th><th class="hide-m">연락처</th><th>입금</th><th></th></tr></thead><tbody>' +
       show.map(p => '<tr class="' + (isActive(p) ? '' : 'dim') + '"><td class="num">' + esc(p.id) + '</td><td><b>' + esc(p.name) + '</b></td><td class="num">' + esc(fmtBirth(p.birth)) + '</td><td>' + esc(GL(p.groupKey)) + '</td><td class="hide-m small">' + esc(p.school) + ' ' + esc(p.grade) + '</td><td class="hide-m small">' + (p.region ? (KC.isFar(D.cfg, p) ? '<span class="badge warn">' + esc(p.region) + '</span>' : esc(p.region)) : '') + '</td><td class="hide-m small num">' + esc(App.phone4(p.phone)) + (p.guardianPhone ? ' / 보호자 ' + esc(App.phone4(p.guardianPhone)) : '') + '</td>' +
-        '<td>' + (!isActive(p) ? '<span class="badge">취소</span>' : isPaid(p) ? '<span class="badge ok">확인</span>' : '<span class="badge warn">미입금</span>') + (p.piecesAt ? ' <span class="badge acc" title="참가자가 곡목을 고친 시각">곡목 수정 ' + esc(String(p.piecesAt).slice(5, 16)) + '</span>' : '') + '</td><td><button class="sm" data-ed="' + esc(p.id) + '">수정</button></td></tr>').join('') +
+        '<td>' + (!isActive(p) ? '<span class="badge">' + (/환불/.test(p.status + p.payStatus) ? '환불' : '취소') + '</span>' : isPaid(p) ? '<span class="badge ok">확인</span>' : '<span class="badge warn">입금 대기</span>') + (p.piecesAt ? ' <span class="badge acc" title="참가자가 곡목을 고친 시각">곡목 수정 ' + esc(String(p.piecesAt).slice(5, 16)) + '</span>' : '') + '</td><td><button class="sm" data-ed="' + esc(p.id) + '">수정</button></td></tr>').join('') +
       '</tbody></table></div>' : '<div class="empty">참가자가 없어요. 홈페이지에서 내려받은 신청자 엑셀(신청자관리 xlsx)을 불러오세요.</div>');
   $$('[data-ed]').forEach(b => b.addEventListener('click', () => editPerson(D.participants.find(p => p.id === b.dataset.ed))));
 }
@@ -173,13 +335,13 @@ function importFile(file) {
     const m = modal('<h2>신청자 엑셀 불러오기</h2><p class="muted small">' + esc(file.name) + ' · 시트 "' + esc(sh.name) + '" · ' + body.length + '줄. 열 연결을 확인해 주세요.</p>' +
       '<div class="mapgrid">' + Object.keys(App.FIELD_LABEL).map(f => '<div><label>' + App.FIELD_LABEL[f] + (['id', 'name', 'birth', 'division', 'category'].includes(f) ? ' *' : '') + '</label><select data-f="' + f + '">' + opts + '</select></div>').join('') + '</div>' +
       '<hr><div class="row"><label class="inline"><input type="radio" name="md" value="merge" checked> 기존 명단에 합치기 (같은 접수번호는 갱신)</label><label class="inline"><input type="radio" name="md" value="replace"> 전체 바꾸기</label></div>' +
-      '<p class="small muted">입금 확인된 사람은 새 파일에 미입금으로 나와도 입금 확인 상태를 유지해요.</p>' +
+      (D.cfg.payMode === 'match' ? '<p class="small muted">입금 확인된 사람은 새 파일에 미입금으로 나와도 입금 확인 상태를 유지해요.</p>' : '<p class="small muted">가상계좌 방식이라 파일의 <b>결제 상태</b>(입금 확인·입금 대기·환불)를 그대로 씁니다. 입금이 늘면 새로 내려받아 다시 올리면 돼요. 조편성은 <b>입금 확인</b>된 사람만 들어가요.</p>') +
       (App.hasPieceColumns(header) ? '<div class="note ok small">곡목 열을 찾았어요: ' + esc(header.filter(h => /^(예선|본선)\s*.*곡명$/.test(String(h).trim())).join(', ')) + ' → 예선·본선 곡목으로 나눠 저장하고, 심사위원 화면과 곡목표에 연주순서대로 보여 줍니다.</div>' : '') +
       '<div id="pv" class="scroll" style="margin:10px 0"></div><div class="row end"><button data-close>취소</button><button class="pri" id="go">' + body.length + '명 불러오기</button></div>', { wide: true });
     $$('[data-f]', m.el).forEach(s => { s.value = String(map[s.dataset.f]); s.addEventListener('change', pv); });
     function rowsNow() {
       const mm = {}; $$('[data-f]', m.el).forEach(s => mm[s.dataset.f] = +s.value);
-      return body.map(r => { const o = {}; Object.keys(mm).forEach(f => o[f] = mm[f] >= 0 ? String(r[mm[f]] || '').trim() : ''); o.pieces = App.piecesFrom(header, r); return o; }).filter(o => o.name);
+      return body.map(r => { const o = {}; Object.keys(mm).forEach(f => o[f] = mm[f] >= 0 ? String(r[mm[f]] || '').trim() : ''); if (o.address2) o.address = (o.address + ' ' + o.address2).trim(); delete o.address2; o.pieces = App.piecesFrom(header, r); return o; }).filter(o => o.name);
     }
     function pv() {
       const rs = rowsNow().slice(0, 5);
@@ -255,6 +417,14 @@ function drawPay() {
 }
 
 /* ================= 조편성·시간표 ================= */
+// 실제 조 시간 점검 — 손으로 고친 시각까지: 겹침 · 쉬는 시간 부족 · 점심 없음/짧음 · 늦게 끝남 · (설정 시) 쉬지 않고 너무 오래
+function timeCheckCard(r) {
+  const ses = D.sessions.filter(s => s.round === r); if (!ses.length) return '';
+  const W = KC.checkSessions(D.cfg, ses, D.plan), ks = Object.keys(W).sort();
+  if (!ks.length) return '<div class="note ok small" style="margin:12px 0">시간 점검: 날짜마다 조 사이 쉬는 시간(최소 ' + esc(D.cfg.minGap || 5) + '분)·점심(최소 ' + esc(D.cfg.lunchMin || 60) + '분)·겹침·끝나는 시각 모두 괜찮아요.</div>';
+  return '<div class="card"><h2>시간 점검 <span class="badge warn">' + ks.reduce((a, k) => a + W[k].length, 0) + '</span></h2><p class="small muted">조 시각을 손으로 고쳤거나 사람을 옮겨 조 인원이 바뀌었을 때 확인해 주세요. 기준은 설정 › 시간표 기본값.</p>' +
+    ks.map(k => '<div style="margin-top:8px"><b>' + esc(fmtDate(k.split('|')[1], true)) + '</b><ul style="margin:4px 0 0 18px;padding:0">' + W[k].map(w => '<li>' + esc(w) + '</li>').join('') + '</ul></div>').join('') + '</div>';
+}
 function sched() {
   const r = ROUND, P = D.participants;
   const pk = {}; P.forEach(p => pk[p.id] = p);
@@ -274,7 +444,7 @@ function sched() {
     '<div class="scroll"><table><thead><tr><th>부문</th><th class="n">대상</th><th class="n">편성</th><th>조</th><th></th></tr></thead><tbody>' +
     groups.map(g => '<tr><td><b>' + esc(GL(g.k)) + '</b></td><td class="n">' + g.elig + '</td><td class="n">' + (g.placed || '') + (g.placed && g.placed !== g.elig ? ' <span class="badge warn">차이 ' + (g.elig - g.placed) + '</span>' : '') + '</td><td class="small">' + g.gs.map(s => esc(fmtDate(s.date)) + ' ' + esc(s.startTime) + ' ' + esc(s.label) + '(' + (cnt[s.sessionId] || 0) + ')').join(' · ') + '</td>' +
       '<td><button class="sm ' + (g.gs.length ? '' : 'pri') + '" data-gen="' + esc(g.k) + '" ' + (g.elig ? '' : 'disabled') + '>' + (g.gs.length ? '다시 편성' : '편성하기') + '</button></td></tr>').join('') +
-    '</tbody></table></div></div>' +
+    '</tbody></table></div></div>' + timeCheckCard(r) +
     '<div class="card"><div class="row"><h2 style="margin:0">' + esc(rname(r)) + ' 전체 시간표</h2><span class="sp"></span><button id="xs">시간표 엑셀</button><button id="xn">공지용 조별 명단 엑셀</button></div>' +
     (ses.length ? '<div class="scroll" style="margin-top:12px"><table><thead><tr><th>일자</th><th>부문</th><th>조</th><th class="n">인원</th><th>추첨</th><th>시작</th><th>예상 종료</th><th>장소</th><th></th></tr></thead><tbody>' +
       ses.map(s => '<tr data-sid="' + esc(s.sessionId) + '"><td><input type="date" value="' + esc(s.date) + '" data-k="date" style="min-height:36px;padding:4px 6px;width:150px"></td><td>' + esc(GL(s.groupKey)) + '</td><td>' + esc(s.label) + '</td><td class="n">' + (cnt[s.sessionId] || 0) + (farCnt[s.sessionId] ? ' <span class="badge warn" title="지방 참가자">지방 ' + farCnt[s.sessionId] + '</span>' : '') + '</td><td class="num">' + esc(s.drawTime) + '</td><td><input type="time" value="' + esc(s.startTime) + '" data-k="startTime" style="min-height:36px;padding:4px 6px;width:110px"></td><td class="num">' + esc(s.endTime) + '</td>' +
@@ -296,7 +466,7 @@ function sched() {
   });
 }
 function genDialog(g) {
-  const per = +D.cfg.perSec || 200, size = +D.cfg.groupSize || 20, n = g.elig, k = Math.max(1, Math.ceil(n / size));
+  const per = +D.cfg.perSec || 200, size = +D.cfg.groupSize || 15, n = g.elig, k = Math.max(1, Math.ceil(n / size));
   // 다시 편성할 때는 기존 조의 날짜·시각만 채우고 인원은 비워 둠 → 그 사이 늘어난 인원까지 고르게 나눔
   const lines = g.gs.length ? g.gs.map(s => s.date + ' ' + s.startTime).join('\n') : '';
   const passY2 = new Set(D.entries.filter(e => e.round === 'R1' && e.pass === 'Y').map(e => e.pid));
@@ -350,10 +520,17 @@ const secIn = v => KC.parseSec(v);
 const secOut = sec => sec ? TT.secShort(sec) : '';
 function gDefault(k, round) {
   const g = D.groups.find(x => x.groupKey === k) || {};
-  const per = +(round === 'R2' ? g.perSec2 : g.perSec) || +(round === 'R2' ? D.cfg.perSec2 : D.cfg.perSec) || 200;
-  const size = +(round === 'R2' ? g.groupSize2 : g.groupSize) || +(round === 'R2' ? D.cfg.groupSize2 : D.cfg.groupSize) || 20;
+  const per = +(round === 'R2' ? g.perSec2 : g.perSec) || KC.perSecDefault(D.cfg, k, round) || +(round === 'R2' ? D.cfg.perSec2 : D.cfg.perSec) || 200;
+  const size = +(round === 'R2' ? g.groupSize2 : g.groupSize) || +(round === 'R2' ? D.cfg.groupSize2 : D.cfg.groupSize) || (round === 'R2' ? 7 : 15);
   return { per, size };
 }
+// 대상 인원을 조당 최대 인원으로 고르게 나누면 — '7개 조 · 15·15·14·14·14·14·14명 · 조당 약 50분'
+function splitTxt(n, size, per) {
+  const sz = KC.splitSizes(n, size); if (!sz.length) return '';
+  const lo = Math.min(...sz), hi = Math.max(...sz), u = +D.cfg.roundMin || 5, dur = Math.ceil(hi * (+per || 200) / 60 / u) * u;
+  return '<b>' + sz.length + '개 조</b> · ' + (lo === hi ? lo + '명씩' : lo + '~' + hi + '명') + ' · 조당 약 ' + dur + '분';
+}
+function farN(k) { return D.participants.filter(p => p.groupKey === k && isActive(p) && isPaid(p) && KC.isFar(D.cfg, p)).length; }
 function eligibleN(k, round) {
   if (round === 'R1') return D.participants.filter(p => p.groupKey === k && isActive(p) && isPaid(p)).length;
   const pass = new Set(D.entries.filter(e => e.round === 'R1' && e.pass === 'Y').map(e => e.pid));
@@ -371,16 +548,16 @@ function planTab() {
   view().innerHTML = '<div class="row" style="margin-bottom:14px"><div class="seg"><button data-r="R1" class="' + (r === 'R1' ? 'on' : '') + '">' + esc(rname('R1')) + '</button><button data-r="R2" class="' + (r === 'R2' ? 'on' : '') + '">' + esc(rname('R2')) + '</button></div><span class="sp"></span><a class="btn sm" href="schedule.html" target="_blank" rel="noopener">참가자 공개 시간표 ↗</a></div>' +
     '<div class="card"><div class="row"><h2 style="margin:0">부문별 기준</h2><span class="sp"></span><button class="sm" id="gsv">기준 저장</button></div>' +
     '<p class="small muted">1인 시간은 <b>3:20</b>처럼 분:초로 적어요(예선 2:30~3:30, 본선 초 7:00·중 8:00·고 20:00 등). 날짜 계획에 부문을 넣을 때 이 값이 기본으로 들어가요.</p>' +
-    '<div class="scroll"><table><thead><tr><th>부문</th><th class="n">대상 인원</th><th>1인 시간</th><th>조당 인원</th><th class="n">계획에 넣은 인원</th><th class="n">남은 인원</th></tr></thead><tbody>' +
-    keys.map(k => { const df = gDefault(k, r), need = eligibleN(k, r), pl = pa.totals[k] || 0; return '<tr><td><b>' + esc(GL(k)) + '</b></td><td class="n">' + need + '</td><td><input data-gk="' + esc(k) + '" data-f="per" value="' + secOut(df.per) + '" style="width:80px;min-height:36px;padding:4px 8px"></td><td><input data-gk="' + esc(k) + '" data-f="size" value="' + df.size + '" inputmode="numeric" style="width:70px;min-height:36px;padding:4px 8px"></td><td class="n">' + (pl || '') + '</td><td class="n">' + (need - pl ? '<span class="badge ' + (need - pl > 0 ? 'warn' : 'bad') + '">' + (need - pl) + '</span>' : '<span class="badge ok">0</span>') + '</td></tr>'; }).join('') +
+    '<div class="scroll"><table><thead><tr><th>부문</th><th class="n">대상 인원</th><th class="n">지방</th><th>1인 시간</th><th>조당 최대</th><th>이렇게 나뉘어요</th><th class="n">계획에 넣은 인원</th><th class="n">남은 인원</th></tr></thead><tbody>' +
+    keys.map(k => { const df = gDefault(k, r), need = eligibleN(k, r), pl = pa.totals[k] || 0, far = r === 'R1' ? farN(k) : 0; return '<tr><td><b>' + esc(GL(k)) + '</b></td><td class="n">' + need + '</td><td class="n">' + (far ? '<span class="badge warn">' + far + '</span>' : '') + '</td><td><input data-gk="' + esc(k) + '" data-f="per" value="' + secOut(df.per) + '" style="width:80px;min-height:36px;padding:4px 8px"></td><td><input data-gk="' + esc(k) + '" data-f="size" value="' + df.size + '" inputmode="numeric" style="width:70px;min-height:36px;padding:4px 8px"></td><td class="small" data-split="' + esc(k) + '">' + splitTxt(need, df.size, df.per) + '</td><td class="n">' + (pl || '') + '</td><td class="n">' + (need - pl ? '<span class="badge ' + (need - pl > 0 ? 'warn' : 'bad') + '">' + (need - pl) + '</span>' : '<span class="badge ok">0</span>') + '</td></tr>'; }).join('') +
     '</tbody></table></div></div>' +
     '<div class="card"><div class="row"><h2 style="margin:0">날짜별 계획</h2>' + (PLAN_DIRTY[r] ? '<span class="badge warn">저장 안 됨</span>' : '') + '<span class="sp"></span><button class="sm" id="pad">날짜 추가</button><button class="sm pri" id="psv">계획 저장</button><button class="sm" id="pap">계획대로 조편성</button></div>' +
-    '<p class="small muted">하루에 들어갈 부문을 순서대로 넣으면, 조 경연시간을 ' + esc(D.cfg.roundMin || 5) + '분 단위로 올리고 조 사이 ' + esc(D.cfg.sessionGap || 10) + '분을 띄워요. 오전 조는 오전 마감 전에 끝나도록 인원을 줄이고, 점심(최소 ' + esc(D.cfg.lunchMin || 60) + '분) 뒤 오후 시작 시각부터 이어 갑니다. 원하는 대로 안 나오면 \'조 인원 직접\'에 <code>13,18,18,18</code>처럼 적어요.</p>' +
+    '<p class="small muted">하루에 들어갈 부문을 순서대로 넣으면, 조 경연시간을 ' + esc(D.cfg.roundMin || 5) + '분 단위로 올리고 조 사이 ' + esc(D.cfg.sessionGap || 10) + '분을 띄워요. 오전 조는 오전 마감 전에 끝나도록 인원을 줄이고, 점심(최소 ' + esc(D.cfg.lunchMin || 60) + '분) 뒤 오후 시작 시각부터 이어 갑니다. 원하는 대로 안 나오면 \'조 인원 직접\'에 <code>13,18,18,18</code>처럼 적어요. 날마다 점심 최소·조 사이 쉬는 시간을 바꿀 수 있고, <b>긴 쉬는 시간</b>에 <code>15:00 20</code>을 적으면 15시 넘어 끝나는 첫 조 뒤에 20분을 쉬어요. 점심 앞뒤로 부문이 바뀌면 <b>중간채점</b>으로 표시하고 점심을 ' + esc(D.cfg.midScoreMin || 20) + '분 더 권해요.</p>' +
     (days.length ? days.map((d, i) => dayCard(d, i, pa.days.find(x => x.day === d))).join('') : '<div class="empty">날짜를 추가해서 시작하세요.</div>') + '</div>' +
     '<div class="card"><div class="row"><h2 style="margin:0">시간표 출력</h2><span class="sp"></span><div class="seg"><button data-src="plan" class="' + (srcOf(r) === 'plan' ? 'on' : '') + '">계획 기준</button><button data-src="real" class="' + (srcOf(r) === 'real' ? 'on' : '') + '" ' + (hasSes ? '' : 'disabled') + '>편성 결과 기준</button></div></div>' +
-    '<p class="small muted">편성 전에는 계획으로 미리 보고, 편성 뒤에는 실제 조(옮긴 사람 반영)로 뽑으세요. 참가자 공개 페이지는 늘 편성 결과로 보여요.</p>' +
+    '<p class="small muted">편성 전에는 계획으로 미리 보고, 편성 뒤에는 실제 조(옮긴 사람 반영)로 뽑으세요. 참가자 공개 페이지는 늘 편성 결과로 보여요.</p>' + (srcOf(r) === 'real' ? timeCheckCard(r).replace('<div class="card">', '<div class="panel" style="margin-top:8px">') : '') +
     '<div class="grid g2" style="margin-top:8px">' +
-    [['pub', '공개용 시간표', '참가자·홈페이지 공지용 — 1인 시간 빼고 날짜별 한 장'], ['int', '내부용 시간표', '운영진·심사위원용 — 1인 시간, 추첨 시각, 장소·피아노'], ['det', '세부일정표 (엑셀)', '대기(추첨)·시작·종료·경연시간·쉼시간·인당시간·조출'], ['cal', '달력형 (내부용)', '날짜 칸마다 부문·오전/오후 인원·1인 시간·피아노사용'], ['cals', '달력형 (전달용)', '학교·학원 전달용 — 부문·오전/오후만'], ['xls', '시간표·달력 엑셀', '공개용·내부용·세부일정표·달력 시트를 한 파일로']].map(b => '<button class="scard" data-o="' + b[0] + '" style="min-height:76px"><b>' + b[1] + '</b><div class="small muted" style="font-weight:500">' + b[2] + '</div></button>').join('') +
+    [['wall', '벽보용 시간표 (구글 문서·워드)', '75회 예선·본선시간표(종합)처럼 큰 글씨 — 하루 한 장 + 부문별 장, 고쳐 쓰고 붙이기'], ['pub', '공개용 시간표', '참가자·홈페이지 공지용 — 1인 시간 빼고 날짜별 한 장'], ['int', '내부용 시간표', '운영진·심사위원용 — 1인 시간, 추첨 시각, 장소·피아노'], ['det', '세부일정표 (엑셀)', '대기(추첨)·시작·종료·경연시간·쉼시간·인당시간·조출'], ['cal', '달력형 (내부용)', '날짜 칸마다 부문·오전/오후 인원·1인 시간·피아노사용'], ['cals', '달력형 (전달용)', '학교·학원 전달용 — 부문·오전/오후만'], ['xls', '시간표·달력 엑셀', '공개용·내부용·세부일정표·달력 시트를 한 파일로']].map(b => '<button class="scard" data-o="' + b[0] + '" style="min-height:76px"><b>' + b[1] + '</b><div class="small muted" style="font-weight:500">' + b[2] + '</div></button>').join('') +
     '</div><div id="ttpv" style="margin-top:12px"></div></div>';
   bindPlan(r, days);
 }
@@ -393,19 +570,21 @@ function dayCard(d, i, res) {
     '<b>' + (d.date ? esc(App.fmtDate(d.date)) : '날짜') + '</b>' + ci('date', d.date, 150, '', 'date') +
     '<label class="small">시작</label>' + ci('start', d.start || '09:30', 108, '', 'time') + '<label class="small">오전 마감</label>' + ci('amEnd', d.amEnd || D.cfg.amEnd, 108, '', 'time') + '<label class="small">오후 시작</label>' + ci('pmStart', d.pmStart || D.cfg.pmStart, 108, '', 'time') +
     '<label class="inline small"><input type="checkbox" data-d="' + i + '" data-f="piano" ' + (d.piano === 'Y' ? 'checked' : '') + '> 피아노 사용</label><span class="sp"></span><button class="sm danger" data-dx="' + i + '">날짜 삭제</button></div>' +
+    '<div class="row" style="gap:6px;margin-top:6px"><label class="small">점심 최소(분)</label>' + ci('lunchMin', d.lunchMin, 64, D.cfg.lunchMin || '60') + '<label class="small">조 사이 쉬는 시간(분)</label>' + ci('gap', d.gap, 56, D.cfg.sessionGap || '10') + '<label class="small">긴 쉬는 시간</label>' + ci('breaks', d.breaks, 150, '예: 15:00 20') + '</div>' +
     '<div class="row" style="gap:6px;margin-top:6px"><label class="small">장소</label>' + ci('venue', d.venue, 180, D.cfg.venue) + '<label class="small">메모</label>' + ci('note', d.note, 260, '예: 중간채점, 심사위원 교체') + '</div>' +
-    '<div class="scroll" style="margin-top:8px"><table><thead><tr><th>부문</th><th>인원</th><th>1인 시간</th><th>조당</th><th>오후부터</th><th>조 인원 직접 (선택)</th><th></th></tr></thead><tbody>' +
-    d.blocks.map((b, j) => '<tr><td><select data-d="' + i + '" data-b="' + j + '" data-f="groupKey" style="min-height:34px;padding:3px 6px;font-size:14px;width:170px">' + opts(b.groupKey) + '</select></td><td>' + bi(j, 'count', b.count, 64) + '</td><td>' + bi(j, 'perSec', b.perSec ? secOut(secIn(b.perSec)) : '', 68, '3:20') + '</td><td>' + bi(j, 'size', b.size, 52) + '</td>' +
+    '<div class="scroll" style="margin-top:8px"><table><thead><tr><th>부문</th><th>인원</th><th>1인 시간</th><th>조당</th><th>쉼(분)</th><th>오후부터</th><th>조 인원 직접 (선택)</th><th></th></tr></thead><tbody>' +
+    d.blocks.map((b, j) => '<tr><td><select data-d="' + i + '" data-b="' + j + '" data-f="groupKey" style="min-height:34px;padding:3px 6px;font-size:14px;width:170px">' + opts(b.groupKey) + '</select></td><td>' + bi(j, 'count', b.count, 64) + '</td><td>' + bi(j, 'perSec', b.perSec ? secOut(secIn(b.perSec)) : '', 68, '3:20') + '</td><td>' + bi(j, 'size', b.size, 52) + '</td><td>' + bi(j, 'gap', b.gap, 48, '') + '</td>' +
       '<td class="c"><input type="checkbox" data-d="' + i + '" data-b="' + j + '" data-f="pmOnly" ' + (b.pmOnly ? 'checked' : '') + '></td><td>' + bi(j, 'sizes', b.sizes, 150, '예: 13,18,18') + '</td>' +
       '<td style="white-space:nowrap"><button class="sm" data-bu="' + i + '|' + j + '" ' + (j ? '' : 'disabled') + '>▲</button><button class="sm" data-bd="' + i + '|' + j + '" ' + (j < d.blocks.length - 1 ? '' : 'disabled') + '>▼</button><button class="sm danger" data-bx="' + i + '|' + j + '">✕</button></td></tr>').join('') +
     '</tbody></table></div><button class="sm" data-ba="' + i + '" style="margin-top:6px">부문 넣기</button>' +
     '<div class="dpv" data-pv="' + i + '">' + dayPreview(res) + '</div></div>';
 }
+const toM = t => { const m = /(\d+):(\d+)/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : 0; };
 function dayPreview(res) {
   if (!res || !res.items.length) return '';
   return '<div style="margin-top:10px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:10px"><div class="small"><b>' + esc(res.start) + ' ~ ' + esc(res.end) + '</b>' + res.warn.map(w => ' <span class="badge warn">' + esc(w) + '</span>').join('') + '</div>' +
     '<div class="small num" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:2px 16px;margin-top:4px">' +
-    res.items.map(x => x.type === 'lunch' ? '<div style="color:var(--accent);font-weight:700">점심 ' + x.start + ' ~ ' + x.end + '</div>' : '<div>' + esc(GL(x.groupKey).split(' ').slice(1).join(' ') || GL(x.groupKey)) + ' ' + x.no + '조 &nbsp;' + x.start + ' ~ ' + x.end + ' / ' + x.n + '명</div>').join('') + '</div></div>';
+    res.items.map(x => x.type === 'lunch' ? '<div style="color:var(--accent);font-weight:700">점심 ' + x.start + ' ~ ' + x.end + ' (' + (toM(x.end) - toM(x.start)) + '분' + (x.note ? ' · ' + esc(x.note) : '') + ')</div>' : x.type === 'break' ? '<div style="color:var(--accent)">쉬는 시간 ' + x.start + ' ~ ' + x.end + ' (' + (toM(x.end) - toM(x.start)) + '분)</div>' : '<div>' + esc(GL(x.groupKey).split(' ').slice(1).join(' ') || GL(x.groupKey)) + ' ' + x.no + '조 &nbsp;' + x.start + ' ~ ' + x.end + ' / ' + x.n + '명</div>').join('') + '</div></div>';
 }
 function bindPlan(r, days) {
   const rerender = () => { PLAN_DIRTY[r] = true; const y = window.scrollY; planTab(); window.scrollTo(0, y); };
@@ -416,6 +595,11 @@ function bindPlan(r, days) {
   };
   $$('[data-r]').forEach(b => b.addEventListener('click', () => { ROUND = b.dataset.r; planTab(); }));
   $$('[data-src]').forEach(b => b.addEventListener('click', () => { TT_SRC = b.dataset.src; planTab(); }));
+  $$('[data-gk]').forEach(inp => inp.addEventListener('input', () => {
+    const k = inp.dataset.gk, cell = $$('[data-split]').find(x => x.dataset.split === k); if (!cell) return;
+    const size = +$$('[data-gk]').find(x => x.dataset.gk === k && x.dataset.f === 'size').value || 15, per = secIn($$('[data-gk]').find(x => x.dataset.gk === k && x.dataset.f === 'per').value) || 200;
+    cell.innerHTML = splitTxt(eligibleN(k, r), size, per);
+  }));
   $('#gsv').addEventListener('click', () => {
     const rows = {}; $$('[data-gk]').forEach(inp => { const o = rows[inp.dataset.gk] = rows[inp.dataset.gk] || { groupKey: inp.dataset.gk }; if (inp.dataset.f === 'per') o[r === 'R2' ? 'perSec2' : 'perSec'] = String(secIn(inp.value) || ''); else o[r === 'R2' ? 'groupSize2' : 'groupSize'] = inp.value; });
     call('saveGroups', { groups: Object.values(rows) }).then(() => { toast('기준을 저장했어요', 'ok'); refresh(); }).catch(onErr);
@@ -479,15 +663,16 @@ function bindPlan(r, days) {
 }
 function ttData(r, days) {
   const info = Object.assign({}, D.cfg);
-  if (srcOf(r) === 'plan') return { info, days: TT.buildDays(TT.sessionsFromPlan(KC.planAll(D.cfg, days), r), days.map(d => ({ round: r, date: d.date, piano: d.piano, note: d.note, venue: d.venue }))) };
+  if (srcOf(r) === 'plan') return { info, days: TT.buildDays(TT.sessionsFromPlan(KC.planAll(D.cfg, days), r), days.map(d => ({ round: r, date: d.date, piano: d.piano, note: d.note, venue: d.venue })), { breakMin: D.cfg.breakMin }) };
   const cnt = {}; D.entries.forEach(e => cnt[e.sessionId] = (cnt[e.sessionId] || 0) + 1);
   const list = D.sessions.filter(s => s.round === r).map(s => Object.assign({}, s, { count: cnt[s.sessionId] || 0 }));
-  return { info, days: TT.buildDays(list, D.plan) };
+  return { info, days: TT.buildDays(list, D.plan, { breakMin: D.cfg.breakMin }) };
 }
 function ttOutput(kind, r, days) {
   const { info, days: tdays } = ttData(r, days);
   if (!tdays.length) { toast('보여 줄 시간표가 없어요. 날짜 계획을 먼저 넣어 주세요.'); return; }
   const st = '<style>' + TT.CSS + '</style>';
+  if (kind === 'wall') { ADMX.openBuild('tt_wall', { round: r, sessions: tdays.reduce((a, d) => a.concat(d.ses), []) }); return; }
   if (kind === 'pub' || kind === 'int') { const html = tdays.map(d => TT.dayDoc(d, info, kind === 'int' ? 'internal' : 'public')).join(''); $('#ttpv').innerHTML = st + '<div class="row"><b>' + (kind === 'int' ? '내부용' : '공개용') + ' 미리보기</b><span class="sp"></span><button class="sm pri" id="ttp">인쇄</button></div>' + html; $('#ttp').addEventListener('click', () => App.printHTML(st + '<div class="pr">' + html + '</div>')); }
   if (kind === 'det') App.writeXlsx([{ name: '세부일정표', rows: [[info.title + ' ' + rname(r) + ' 세부일정표']].concat(TT.detailRows(tdays, info)) }], rname(r) + '_세부일정표_' + App.today() + '.xlsx');
   if (kind === 'cal' || kind === 'cals') {
@@ -556,16 +741,66 @@ function saveBlob(content, name, type) {
 
 /* ================= 출석부·인쇄 ================= */
 let PSES = null;
+// 날짜만 고르면 그날 예선 심사위원 전원의 채점표를 한꺼번에
+function oxDayCard() {
+  const m = {}; D.sessions.forEach(x => { if (x.round === 'R1' && x.date) m[x.date] = 1; }); D.judges.forEach(j => { if (j.round === 'R1') String(j.dates || '').split(/[,\s]+/).filter(Boolean).forEach(x => m[x] = 1); });
+  const days = Object.keys(m).sort(); if (!days.length) return '';
+  const ox = KC.roundCfg(D.cfg, 'R1').mode === 'ox';
+  return '<div class="card"><h2>날짜별로 한꺼번에</h2><p class="small muted"><b>출석부</b>는 A4 가로로 조마다 한 장. ' + (ox ? '<b>' + esc(rname('R1')) + ' 채점표</b>는 심사위원마다 그날 하루치를 한 장에 60명(왼쪽 1~30 · 오른쪽 31~60) — 맡은 조를 경연순번대로 이어 붙이고, 60명이 넘으면 다음 장으로 넘어가요. 조편성 전이면 명단의 심사일로 1~60 빈 칸이 나와요.' : '') + '</p>' +
+    '<div class="row"><select id="oxd" style="width:auto">' + days.map(d => '<option value="' + esc(d) + '">' + esc(fmtDate(d, true)) + '</option>').join('') + '</select>' +
+    '<button id="atd">이 날 출석부 (조마다 한 장)</button><button id="pfd">이 날 연주순서 출석부</button>' + (ox ? '<button class="pri" id="oxp">이 날 채점표 (심사위원별)</button><button id="oxa">채점표 모든 날</button>' : '') + '</div></div>';
+}
+function bindOxDay() {
+  if (!$('#oxd')) return;
+  const dayAtt = kind => { const d = $('#oxd').value, ss = D.sessions.filter(x => x.date === d).sort((a, b) => KC.cmpKo(a.round + a.startTime, b.round + b.startTime)); if (!ss.length) { toast('이 날은 아직 조편성이 없어요', 'bad'); return; } App.printHTML(ss.map(x => attHTML(x.sessionId, kind)).join(''), { landscape: true }); };
+  $('#atd').addEventListener('click', () => dayAtt('att'));
+  $('#pfd').addEventListener('click', () => dayAtt('perf'));
+  const p = $('#oxp'); if (!p) return;
+  p.addEventListener('click', () => printJudgeDays(FM.judgeDayPages(D, { round: 'R1', dates: [$('#oxd').value] })));
+  $('#oxa').addEventListener('click', () => printJudgeDays(FM.judgeDayPages(D, { round: 'R1' })));
+}
 function printTab() {
   const ses = D.sessions.slice().sort((a, b) => KC.cmpKo(a.round + a.date + a.startTime, b.round + b.date + b.startTime));
   if (!PSES || !ses.some(s => s.sessionId === PSES)) PSES = ses[0] ? ses[0].sessionId : null;
   view().innerHTML = ses.length ? '<div class="card"><label class="f" for="ps">조 선택</label><select id="ps">' + ses.map(s => '<option value="' + esc(s.sessionId) + '" ' + (s.sessionId === PSES ? 'selected' : '') + '>[' + esc(rname(s.round)) + '] ' + esc(fmtDate(s.date)) + ' ' + esc(s.startTime) + ' · ' + esc(GL(s.groupKey)) + ' ' + esc(s.label) + '</option>').join('') + '</select>' +
     '<div class="grid g2" style="margin-top:16px">' +
-    [['att', '출석부 (편성 순번순)', '추첨 전, 대기실에서 출석 확인용'], ['perf', '연주순서 출석부', '추첨 후 연주순서대로 — 진행·무대용 (곡목 포함)'], ['songs', '심사위원용 곡목표', '성악 등 — 연주순서별 ①②③ 곡목, 이름 없이'], ['slip', '추첨 번호표', '잘라서 제비뽑기용 (조 인원만큼)'], ['paper', '종이 채점표 (예비)', '태블릿을 못 쓸 때 심사위원별 1장'], ['rcpt', '접수증 일괄 출력', '현장 재발급·분실 대비'], ['xls', '이 조 명단 엑셀', '연락처 포함 내부용']].map(b => '<button class="scard" data-p="' + b[0] + '" style="display:block;text-align:left;white-space:normal;min-height:84px;padding:14px 16px"><b>' + b[1] + '</b><div class="small muted" style="font-weight:500">' + b[2] + '</div></button>').join('') +
-    '</div></div>' : '<div class="empty">먼저 조편성을 해 주세요.</div>';
+    [['att', '출석부 (편성 순번순)', '추첨 전, 대기실에서 출석 확인용 — A4 가로'], ['perf', '연주순서 출석부', '추첨 후 연주순서대로 — 진행·무대용 (곡목 포함), A4 가로'], ['songs', '심사위원용 곡목표', '성악 등 — 연주순서별 ①②③ 곡목, 이름 없이'], ['slip', '추첨 번호표', '잘라서 제비뽑기용 (조 인원만큼)'], ['paper', '종이 채점표 (예비)', '예선: 심사위원마다 그날 하루치 한 장(60칸) · 본선: 심사위원별 1장'], ['rcpt', '접수증 일괄 출력', '현장 재발급·분실 대비'], ['xls', '이 조 명단 엑셀', '연락처 포함 내부용']].map(b => '<button class="scard" data-p="' + b[0] + '" style="display:block;text-align:left;white-space:normal;min-height:84px;padding:14px 16px"><b>' + b[1] + '</b><div class="small muted" style="font-weight:500">' + b[2] + '</div></button>').join('') +
+    '</div></div>' + oxDayCard() : '<div class="empty">먼저 조편성을 해 주세요.</div>' + oxDayCard();
+  bindOxDay();
   if (!ses.length) return;
   $('#ps').addEventListener('change', e => PSES = e.target.value);
   $$('[data-p]').forEach(b => b.addEventListener('click', () => doPrint(b.dataset.p)));
+}
+// 예선 종이 채점표 — 한 장 = 심사위원 한 명의 하루, 60칸 (왼쪽 1~30번째 · 오른쪽 31~60번째)
+function printJudgeDays(pages) {
+  if (!pages.length) { toast('이 날 맡은 심사위원이 없어요. 심사위원 탭의 담당 부문·날짜를 확인해 주세요.', 'bad'); return; }
+  const T = esc(D.cfg.title), R = esc(rname('R1'));
+  const col = sl => '<table class="ox"><thead><tr><th style="width:15mm">경연<br>순번</th><th style="width:19mm">판정<br>(○·✕)</th><th>메모</th></tr></thead><tbody>' +
+    sl.map(x => '<tr><td class="c"><b>' + esc(x.no || '') + '</b></td><td></td><td class="mk">' + esc(x.mark || '') + '</td></tr>').join('') + '</tbody></table>';
+  const html = pages.map(P => {
+    const sl = P.slots.slice(); while (sl.length < 60) sl.push({});
+    return '<div class="pg pr jsh"><h1>' + T + ' — ' + R + ' 채점표</h1><div class="meta"><span>' + esc(P.groups) + '</span><span>' + esc(fmtDate(P.date, true)) + (P.arrive ? ' · ' + esc(P.arrive) + ' 도착' : '') + '</span><span>' + (P.count ? P.count + '명' : '조편성 전') + (P.pages > 1 ? ' · ' + P.page + '/' + P.pages + '쪽' : '') + '</span></div>' +
+      '<div class="jn"><span>심사위원 <b>' + esc(P.judge.name || '') + '</b></span><span>서명 ____________________</span></div>' +
+      '<div class="two">' + col(sl.slice(0, 30)) + col(sl.slice(30, 60)) + '</div>' +
+      '<p class="nt">본선 추천 ○, 아니면 ✕ — 무대에 나온 경연순번대로 적어 주세요. ▶ 표시는 조가 바뀌는 곳이에요. 전산 채점이 기본이며 이 표는 예비용입니다.</p></div>';
+  }).join('');
+  App.printHTML(html);
+}
+// 출석부 — A4 가로, 조마다 한 장. 줄 높이는 인원에 맞춰(15명 기준 약 9.5mm)
+function attHTML(sid, kind) {
+  const { s, list } = sessionRows(sid), T = esc(D.cfg.title), R = esc(rname(s.round)), G = esc(GL(s.groupKey));
+  const head = t => '<h1>' + T + ' — ' + R + ' ' + t + '</h1><div class="meta"><span><b>' + G + ' ' + esc(s.label) + '</b></span><span>' + esc(fmtDate(s.date, true)) + ' · 추첨 ' + esc(s.drawTime) + ' · 경연 ' + esc(s.startTime) + (s.endTime ? '~' + esc(s.endTime) : '') + (s.venue ? ' · ' + esc(s.venue) : '') + '</span><span>' + list.length + '명</span></div>';
+  const rh = Math.max(6.5, Math.min(11, 142 / Math.max(list.length, 1))).toFixed(1), tr = '<tr style="height:' + rh + 'mm">';
+  if (kind === 'att') {
+    const rows = list.slice().sort((a, b) => a.seq - b.seq);
+    return '<div class="pg pr att">' + head('출석부') + '<table><thead><tr><th style="width:15mm">순번</th><th style="width:34mm">이름</th><th style="width:28mm">생년월일</th><th>학교</th><th style="width:18mm">학년</th><th style="width:18mm">출석</th><th style="width:26mm">추첨번호</th><th style="width:55mm">비고</th></tr></thead><tbody>' +
+      rows.map(e => tr + '<td class="c">' + e.seq + '</td><td><b>' + esc(e.p.name) + '</b></td><td>' + esc(fmtBirth(e.p.birth)) + '</td><td>' + esc(e.p.school) + '</td><td class="c">' + esc(e.p.grade) + '</td><td class="c"><span class="box"></span></td><td></td><td></td></tr>').join('') +
+      '</tbody></table><div class="af"><span>총 ' + list.length + '명</span><span>출석 확인 ____________ (서명)</span></div></div>';
+  }
+  const rows = list.slice().sort((a, b) => (a.perf == null ? 9999 + +a.seq : a.perf) - (b.perf == null ? 9999 + +b.seq : b.perf)), withP = list.some(e => KC.piecesFor(e.p, s.round).length);
+  return '<div class="pg pr att">' + head('연주순서 출석부') + '<table><thead><tr><th style="width:18mm">연주순서</th><th style="width:20mm">추첨번호</th><th style="width:30mm">이름</th><th' + (withP ? ' style="width:55mm"' : '') + '>학교·학년</th>' + (withP ? '<th>곡목</th>' : '') + '<th style="width:16mm">출석</th><th style="width:' + (withP ? 30 : 60) + 'mm">비고</th></tr></thead><tbody>' +
+    rows.map(e => tr + '<td class="c"><b>' + (e.perf != null ? e.perf : '') + '</b></td><td class="c">' + esc(e.drawNo) + '</td><td><b>' + esc(e.p.name) + '</b></td><td>' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</td>' + (withP ? '<td class="small">' + App.piecesHTML(KC.piecesFor(e.p, s.round)) + '</td>' : '') + '<td class="c">' + (e.attend === 'Y' ? '○' : e.attend === 'N' ? '불참' : '') + '</td><td></td></tr>').join('') +
+    '</tbody></table><div class="af"><span>총 ' + list.length + '명 (불참 ' + list.filter(e => e.attend === 'N').length + '명)</span><span>담당 ____________</span></div></div>';
 }
 function sessionRows(sid) {
   const s = D.sessions.find(x => x.sessionId === sid), pk = {}; D.participants.forEach(p => pk[p.id] = p);
@@ -580,9 +815,8 @@ function doPrint(kind) {
   const { s, list } = sessionRows(PSES), T = esc(D.cfg.title), R = esc(rname(s.round)), G = esc(GL(s.groupKey));
   const head = (t) => '<h1>' + T + ' — ' + R + ' ' + t + '</h1><div class="meta"><span>' + G + ' ' + esc(s.label) + '</span><span>' + esc(fmtDate(s.date, true)) + ' · 추첨 ' + esc(s.drawTime) + ' · 시작 ' + esc(s.startTime) + '</span><span>' + list.length + '명</span></div>';
   const bySeq = list.slice().sort((a, b) => a.seq - b.seq), byPerf = list.slice().sort((a, b) => (a.perf == null ? 9999 + +a.seq : a.perf) - (b.perf == null ? 9999 + +b.seq : b.perf));
-  if (kind === 'att') App.printHTML('<div class="pr">' + head('출석부') + '<table><thead><tr><th>순번</th><th>이름</th><th>생년월일</th><th>학교</th><th>학년</th><th>출석</th><th>추첨번호</th><th>비고</th></tr></thead><tbody>' + bySeq.map(e => '<tr><td class="c">' + e.seq + '</td><td><b>' + esc(e.p.name) + '</b></td><td>' + esc(fmtBirth(e.p.birth)) + '</td><td>' + esc(e.p.school) + '</td><td>' + esc(e.p.grade) + '</td><td class="c"><span class="box"></span></td><td style="width:22mm"></td><td style="width:28mm"></td></tr>').join('') + '</tbody></table></div>');
+  if (kind === 'att' || kind === 'perf') { App.printHTML(attHTML(PSES, kind), { landscape: true }); return; }
   const withP = list.some(e => KC.piecesFor(e.p, s.round).length);
-  if (kind === 'perf') App.printHTML('<div class="pr">' + head('연주순서 출석부') + '<table><thead><tr><th>연주순서</th><th>조별순서</th><th>이름</th><th>학교·학년</th>' + (withP ? '<th>곡목</th>' : '') + '<th>출석</th><th>비고</th></tr></thead><tbody>' + byPerf.map(e => '<tr><td class="c"><b>' + (e.perf != null ? e.perf : '') + '</b></td><td class="c">' + esc(e.drawNo) + '</td><td>' + esc(e.p.name) + '</td><td>' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</td>' + (withP ? '<td>' + App.piecesHTML(KC.piecesFor(e.p, s.round)) + '</td>' : '') + '<td class="c">' + (e.attend === 'Y' ? '○' : e.attend === 'N' ? '불참' : '') + '</td><td style="width:' + (withP ? 18 : 40) + 'mm"></td></tr>').join('') + '</tbody></table></div>');
   if (kind === 'songs') {
     if (!withP) { toast('이 조에는 곡목이 등록된 참가자가 없어요. 지정곡 부문이면 곡목표가 필요 없어요.'); return; }
     App.printHTML('<div class="pr">' + head('심사위원용 곡목표') + '<p style="font-size:9.5pt;margin:0 0 3mm">연주순서대로 각 연주자가 부를 곡입니다. (①②' + (s.round === 'R2' ? '③' : '') + ' 순서로 연주)</p><table><thead><tr><th style="width:16mm">연주순서</th><th>곡목</th></tr></thead><tbody>' +
@@ -590,7 +824,10 @@ function doPrint(kind) {
   }
   if (kind === 'slip') { let h = ''; for (let i = 1; i <= list.length; i++) h += '<div class="slip"><small>' + G + ' ' + esc(s.label) + ' · ' + R + ' 연주순서 추첨</small><b>' + i + '</b><div class="ln">이름</div><div class="ln">학교/학년</div></div>'; App.printHTML('<div class="pr"><div class="slips">' + h + '</div></div>'); }
   if (kind === 'paper') {
-    const mode = KC.roundCfg(D.cfg, s.round).mode, judges = D.judges.filter(j => j.round === s.round).sort((a, b) => (+a.seat) - (+b.seat));
+    const mode = KC.roundCfg(D.cfg, s.round).mode;
+    // 예선(O/X): 심사위원마다 그날 맡은 조 전체를 한 장에 60칸으로
+    if (mode === 'ox') { printJudgeDays(FM.judgeDayPages(D, { round: s.round, dates: [s.date], groupKey: s.groupKey })); return; }
+    const judges = D.judges.filter(j => j.round === s.round && KC.judgeCovers(j, s.groupKey)).sort((a, b) => (+a.seat) - (+b.seat));
     const pages = (judges.length ? judges : [{ name: '' }]).map(j => '<div class="pg pr">' + head('채점표') + '<p>심사위원: <b>' + esc(j.name) + '</b> ' + (mode === 'ox' ? '— 본선 추천 ○, 아니면 ✕' : mode === 'rank' ? '— 등위 1~' + esc(D.cfg.r2Max || 5) + ' (1이 가장 높음)' : '— 점수') + '</p><table><thead><tr><th style="width:20mm">연주순서</th>' + (withP ? '<th>곡목</th>' : '') + '<th style="width:' + (withP ? 18 : 30) + 'mm">' + (mode === 'ox' ? '○ / ✕' : '등위') + '</th>' + (s.round === 'R2' ? '<th>심사평</th>' : '<th>메모</th>') + '</tr></thead><tbody>' + byPerf.map(e => '<tr style="height:' + (s.round === 'R2' ? 22 : 9) + 'mm"><td class="c"><b>' + (e.perf != null ? e.perf : '순번 ' + e.seq) + '</b></td>' + (withP ? '<td style="width:72mm">' + App.piecesHTML(KC.piecesFor(e.p, s.round)) + '</td>' : '') + '<td></td><td></td></tr>').join('') + '</tbody></table><p style="text-align:right;margin-top:6mm">서명 ____________________</p></div>').join('');
     App.printHTML(pages);
   }
@@ -602,31 +839,116 @@ function doPrint(kind) {
 }
 
 /* ================= 심사위원 ================= */
-let JDRAFT = null;
+let JDRAFT = null, JFILTER = '';
+const jDates = j => { const ds = String(j.dates || '').split(/[,\s]+/).filter(Boolean); return ds.length ? ds : [...new Set(D.sessions.filter(x => x.round === j.round && KC.judgeCovers(j, x.groupKey) && x.date).map(x => x.date))].sort(); };
+const jDiv = j => String(j.groups || '').split(/[|,\s]/)[0] || '전체';
+const mdk = d => { const m = /(\d{2})-(\d{2})$/.exec(d); return m ? (+m[1]) + '/' + (+m[2]) : d; };
+const manw = n => n % 10000 === 0 ? (n / 10000) + '만' : nf(n);
+function judgeDays(j) { const info = KC.parseDayInfo(j.dayInfo); return jDates(j).map(d => { const x = info[d] || {}; return { date: d, shift: x.shift || '', arrive: x.arrive || '', fee: KC.judgeDayFee(D.cfg, j.round, d, x.shift, x.fee) }; }); }
 function judges() {
-  if (!JDRAFT) JDRAFT = D.judges.map(j => Object.assign({}, j)).sort((a, b) => KC.cmpKo(a.round, b.round) || (+a.seat) - (+b.seat));
+  if (!JDRAFT) JDRAFT = D.judges.map(j => Object.assign({}, j)).sort((a, b) => KC.cmpKo(a.round, b.round) || KC.groupKeyCmp(jDiv(a), jDiv(b)) || (+a.seat || 99) - (+b.seat || 99) || KC.cmpKo(a.name, b.name));
   const divs = [...new Set(D.groupKeys.map(k => k.split('|')[0]))];
   const subs = {}; D.submissions.forEach(s => subs[s.sessionId + '|' + s.judgeId] = s.submittedAt);
-  view().innerHTML = '<div class="card"><div class="row"><h2 style="margin:0">심사위원</h2><span class="sp"></span><button id="addj">한 명 추가</button><button class="pri" id="savej">저장</button></div>' +
-    '<p class="small muted">담당 부문은 <b>' + divs.map(esc).join(', ') + '</b> 처럼 부문 이름, 또는 <b>피아노|초등부</b>처럼 세부 부문, 또는 <b>전체</b>로 적어요(쉼표로 여러 개). 좌석 번호 순서대로 결과표의 심사 A, B, C…가 됩니다. 참가자에게는 이름이 보이지 않아요.</p>' +
-    '<div class="scroll"><table><thead><tr><th>라운드</th><th>이름</th><th>소속</th><th>담당 부문</th><th>좌석</th><th>PIN</th><th></th></tr></thead><tbody>' +
-    JDRAFT.map((j, i) => '<tr data-i="' + i + '"><td><select data-k="round" style="min-height:36px;padding:4px 6px"><option value="R1" ' + (j.round === 'R1' ? 'selected' : '') + '>' + esc(rname('R1')) + '</option><option value="R2" ' + (j.round === 'R2' ? 'selected' : '') + '>' + esc(rname('R2')) + '</option></select></td>' +
-      ['name', 'affiliation', 'groups', 'seat', 'pin'].map(k => '<td><input data-k="' + k + '" value="' + esc(j[k] || '') + '" style="min-height:36px;padding:4px 8px;' + (k === 'seat' ? 'width:60px' : k === 'pin' ? 'width:90px' : '') + '" ' + (k === 'seat' || k === 'pin' ? 'inputmode="numeric"' : '') + '></td>').join('') +
+  const jdivs = [...new Set(JDRAFT.map(jDiv))].sort(KC.groupKeyCmp), shown = JDRAFT.map((j, i) => [j, i]).filter(([j]) => !JFILTER || (JFILTER === 'R1' || JFILTER === 'R2' ? j.round === JFILTER : jDiv(j) === JFILTER));
+  view().innerHTML = '<div class="card"><div class="row"><h2 style="margin:0">심사위원</h2>' + (JDRAFT.length > 12 ? '<select id="jf" style="width:auto;min-height:36px;padding:4px 8px"><option value="">전체 ' + JDRAFT.length + '줄</option><option value="R1"' + (JFILTER === 'R1' ? ' selected' : '') + '>' + esc(rname('R1')) + '만</option><option value="R2"' + (JFILTER === 'R2' ? ' selected' : '') + '>' + esc(rname('R2')) + '만</option>' + jdivs.map(d => '<option' + (JFILTER === d ? ' selected' : '') + '>' + esc(d) + '</option>').join('') + '</select>' : '') + '<span class="sp"></span><label class="btn pri" style="cursor:pointer">명단 엑셀 불러오기<input type="file" id="jimp" accept=".xlsx,.xls" hidden></label><button id="addj">한 명 추가</button><button class="pri" id="savej">저장</button></div>' +
+    '<p class="small muted">「심사위원명단」 구글시트를 <b>파일 › 다운로드 › Microsoft Excel</b>로 받아 올리면 부문 탭의 <b>예선 : 3월25일 / 수요일 오전 9시 도착 / 중등부</b> 줄과 정리 탭의 종일·반나절·심사비까지 읽어서 채워요. ' +
+    '담당 부문은 <b>' + divs.map(esc).join(', ') + '</b> 처럼 부문 이름, <b>피아노|초등부</b>처럼 세부 부문, 또는 <b>전체</b>로 적어요(쉼표로 여러 개). 좌석 번호 순서대로 결과표의 심사 A, B, C…가 됩니다.</p>' +
+    '<div class="scroll"><table><thead><tr><th>라운드</th><th>이름</th><th>소속</th><th>담당 부문</th><th>좌석</th><th>PIN</th><th>심사일 · 심사비</th><th></th></tr></thead><tbody>' +
+    shown.map(([j, i]) => '<tr data-i="' + i + '"><td><select data-k="round" style="min-height:36px;padding:4px 6px;min-width:76px"><option value="R1" ' + (j.round === 'R1' ? 'selected' : '') + '>' + esc(rname('R1')) + '</option><option value="R2" ' + (j.round === 'R2' ? 'selected' : '') + '>' + esc(rname('R2')) + '</option></select></td>' +
+      ['name', 'affiliation', 'groups', 'seat', 'pin'].map(k => '<td><input data-k="' + k + '" value="' + esc(j[k] || '') + '" style="min-height:36px;padding:4px 8px;' + (k === 'seat' ? 'width:56px' : k === 'pin' ? 'width:86px' : k === 'groups' ? 'min-width:170px' : '') + '" ' + (k === 'seat' || k === 'pin' ? 'inputmode="numeric"' : '') + '></td>').join('') +
+      '<td class="small" style="min-width:150px">' + (j.judgeId ? judgeDays(j).map(x => mdk(x.date) + (x.shift === '반나절' ? ' 반' : '') + ' ' + manw(x.fee)).join(', ') : '<span class="muted">저장 후 표시</span>') + (j.note ? '<div class="muted">' + esc(j.note) + '</div>' : '') + '</td>' +
       '<td><button class="sm danger" data-del="' + i + '">삭제</button></td></tr>').join('') +
-    '</tbody></table></div>' + (JDRAFT.length ? '' : '<div class="empty">심사위원을 추가해 주세요.</div>') +
-    '<p class="small muted" style="margin-top:10px">심사위원은 <b>judge.html</b> 주소를 폰·패드로 열고 PIN만 넣으면 자기 조가 나와요. PIN은 겹치면 안 됩니다.</p></div>' +
+    '</tbody></table></div>' + (JDRAFT.length ? '' : '<div class="empty">심사위원 명단 엑셀을 불러오거나 한 명씩 추가해 주세요.</div>') +
+    '<p class="small muted" style="margin-top:10px">심사위원은 <b>judge.html</b> 주소를 폰·패드로 열고 PIN만 넣으면 자기 조가 나와요. PIN은 겹치면 안 됩니다. 신분증·통장 사본·서약은 <b>인력·지급</b> 탭의 개인 링크로 받아요.</p></div>' +
+    judgeFeeCard() +
     '<div class="card"><h2>채점 제출 현황</h2>' + submissionTable(subs) + '</div>';
   $$('tr[data-i] [data-k]').forEach(inp => inp.addEventListener('input', () => { JDRAFT[+inp.closest('tr').dataset.i][inp.dataset.k] = inp.value; }));
   $$('[data-del]').forEach(b => b.addEventListener('click', () => { JDRAFT.splice(+b.dataset.del, 1); judges(); }));
-  $('#addj').addEventListener('click', () => { const r = JDRAFT.length && JDRAFT[JDRAFT.length - 1].round || 'R1'; JDRAFT.push({ judgeId: '', round: r, name: '', affiliation: '', groups: '', seat: String(JDRAFT.filter(j => j.round === r).length + 1), pin: String(Math.floor(100000 + Math.random() * 900000)) }); judges(); });
+  $('#addj').addEventListener('click', () => { const r = JDRAFT.length && JDRAFT[JDRAFT.length - 1].round || 'R1'; JDRAFT.push({ judgeId: '', round: r, name: '', affiliation: '', groups: '', seat: String(JDRAFT.filter(j => j.round === r).length + 1), pin: String(Math.floor(100000 + Math.random() * 900000)) }); JFILTER = ''; judges(); });
+  const jf = $('#jf'); if (jf) jf.addEventListener('change', () => { JFILTER = jf.value; judges(); });
+  $('#jimp').addEventListener('change', e => { if (e.target.files[0]) importJudgeFile(e.target.files[0]); e.target.value = ''; });
   $('#savej').addEventListener('click', e => {
     const removeIds = D.judges.map(j => j.judgeId).filter(id => !JDRAFT.some(j => j.judgeId === id));
     if (JDRAFT.some(j => !j.name || !j.pin)) { toast('이름과 PIN을 모두 넣어 주세요', 'bad'); return; }
     busy(e.target, true);
     call('saveJudges', { judges: JDRAFT, removeIds }).then(() => { JDRAFT = null; toast('저장했어요', 'ok'); refresh(); }).catch(err => { busy(e.target, false); onErr(err); });
   });
+  const xj = $('#xjfee'); if (xj) xj.addEventListener('click', exportJudgeFees);
   $$('[data-unl]').forEach(b => b.addEventListener('click', () => { const [sid, jid] = b.dataset.unl.split('§'); confirmBox('이 심사위원의 제출을 취소하고 다시 수정할 수 있게 할까요?', '제출 취소').then(ok => ok && call('unlockSubmission', { sessionId: sid, judgeId: jid }).then(() => { toast('수정 가능 상태로 돌렸어요', 'ok'); refresh(); }).catch(onErr)); }));
   $$('[data-lock]').forEach(b => b.addEventListener('click', () => { const s = D.sessions.find(x => x.sessionId === b.dataset.lock); call('saveSessions', { sessions: [{ sessionId: s.sessionId, locked: s.locked === 'Y' ? '' : 'Y' }] }).then(() => { toast(s.locked === 'Y' ? '채점을 다시 열었어요' : '채점을 마감했어요', 'ok'); refresh(); }).catch(onErr); }));
+}
+// 정리 탭 오른쪽에 손으로 하던 집계 — 사람별 · 부문별 심사비
+function judgeFeeData() {
+  const byDiv = {}, order = [];
+  D.judges.forEach(j => { const dv = jDiv(j); if (!byDiv[dv]) { byDiv[dv] = { R1: 0, R2: 0, n: 0 }; order.push(dv); } judgeDays(j).forEach(x => { byDiv[dv][j.round] += x.fee; byDiv[dv].n++; }); });
+  const people = (D.judgePeople || []).map(P => {
+    const st = D.staff.find(x => x.staffId === P.staffId) || {}, r = { R1: 0, R2: 0 };
+    (P.dayInfo || []).forEach(x => r[x.round] += +x.fee || 0);
+    const dv = [...new Set(D.judges.filter(j => P.judgeIds.includes(j.judgeId)).map(jDiv))].join(', ');
+    return { P, st, dv, R1: r.R1, R2: r.R2, total: P.total || 0 };
+  }).sort((a, b) => KC.cmpKo(a.P.name, b.P.name));
+  return { byDiv, order: order.sort((a, b) => divOrder(a) - divOrder(b) || KC.cmpKo(a, b)), people };
+}
+function divOrder(d) { const ks = D.groupKeys.map(k => k.split('|')[0]); const i = ks.indexOf(d); return i < 0 ? 99 : i; }
+function judgeFeeCard() {
+  if (!D.judges.length) return '';
+  const F = judgeFeeData(), T = { R1: 0, R2: 0 }; F.order.forEach(d => { T.R1 += F.byDiv[d].R1; T.R2 += F.byDiv[d].R2; });
+  const dates = P => ['R1', 'R2'].map(r => { const ds = (P.dayInfo || []).filter(x => x.round === r); return ds.length ? ds.map(x => mdk(x.date) + (x.shift === '반나절' ? '(반)' : '')).join(', ') : ''; });
+  return '<div class="card"><div class="row"><h2 style="margin:0">심사비 집계</h2><span class="sp"></span><span class="small muted">실인원 ' + F.people.length + '명 · 연인원 ' + F.order.reduce((a, d) => a + F.byDiv[d].n, 0) + '명</span><button id="xjfee">엑셀</button></div>' +
+    '<div class="dgrid" style="grid-template-columns:minmax(0,5fr) minmax(0,7fr);margin-top:12px"><div class="scroll"><table class="gtab"><thead><tr><th>부문</th><th class="n">' + esc(rname('R1')) + '</th><th class="n">' + esc(rname('R2')) + '</th><th class="n">합계</th></tr></thead><tbody>' +
+    F.order.map(d => '<tr><td><b>' + esc(d) + '</b></td><td class="n">' + nf(F.byDiv[d].R1) + '</td><td class="n">' + nf(F.byDiv[d].R2) + '</td><td class="n"><b>' + nf(F.byDiv[d].R1 + F.byDiv[d].R2) + '</b></td></tr>').join('') +
+    '<tr class="hl"><td><b>총계</b></td><td class="n">' + nf(T.R1) + '</td><td class="n">' + nf(T.R2) + '</td><td class="n"><b>' + nf(T.R1 + T.R2) + '</b></td></tr></tbody></table>' +
+    '<p class="small muted" style="margin-top:8px">단가: ' + esc(String(D.cfg.judgeRates || ('1일 ' + nf(D.cfg.judgeFee))).replace(/=(\d+)/g, (m, v) => ' ' + manw(+v))) + '. 명단의 금액이 있으면 그 금액을 써요.</p></div>' +
+    '<div class="scroll" style="max-height:420px"><table class="gtab"><thead><tr><th>이름</th><th>부문</th><th>' + esc(rname('R1')) + '</th><th>' + esc(rname('R2')) + '</th><th class="n">심사비</th><th>정보</th></tr></thead><tbody>' +
+    F.people.map(x => { const [a, b] = dates(x.P); return '<tr><td><b>' + esc(x.P.name) + '</b><div class="small muted">' + esc(x.P.affiliation || '') + '</div></td><td>' + esc(x.dv) + '</td><td class="small">' + a + '</td><td class="small">' + b + '</td><td class="n">' + nf(x.total) + '</td><td>' + (x.st.submittedAt ? '<span class="badge ok">제출</span>' : x.st.staffId ? '<span class="badge warn">미제출</span>' : '<span class="badge">명단만</span>') + '</td></tr>'; }).join('') +
+    '</tbody></table></div></div></div>';
+}
+function exportJudgeFees() {
+  const F = judgeFeeData(), T = { R1: 0, R2: 0 };
+  const a = [['부문', rname('R1'), rname('R2'), '합계']].concat(F.order.map(d => { T.R1 += F.byDiv[d].R1; T.R2 += F.byDiv[d].R2; return [d, F.byDiv[d].R1, F.byDiv[d].R2, F.byDiv[d].R1 + F.byDiv[d].R2]; })).concat([['총계', T.R1, T.R2, T.R1 + T.R2]]);
+  const b = [['이름', '소속', '부문', rname('R2'), rname('R1'), '총계', '연락처', '정보 입력']].concat(F.people.map(x => [x.P.name, x.P.affiliation, x.dv, x.R2, x.R1, x.total, x.P.phone || x.st.phone || '', x.st.submittedAt ? '제출' : '미제출']));
+  const L = []; D.judges.forEach(j => judgeDays(j).forEach(x => L.push({ x, j })));
+  L.sort((p, q) => KC.cmpKo(p.x.date, q.x.date) || divOrder(jDiv(p.j)) - divOrder(jDiv(q.j)) || KC.cmpKo(p.j.round, q.j.round) || (+p.j.seat || 99) - (+q.j.seat || 99));
+  const c = [['번호', '부문', '구분', '구분2', '요일', '일자', '시간', '이름', '소속', '전화번호', '비고', '심사비']].concat(L.map(({ x, j }, i) => [i + 1, jDiv(j), rname(j.round), x.shift || '종일', '일월화수목금토'[new Date(x.date + 'T00:00:00').getDay()] + '요일', (+x.date.slice(5, 7)) + '월' + (+x.date.slice(8)) + '일', x.arrive, j.name, j.affiliation, j.phone, j.note, x.fee]));
+  App.writeXlsx([{ name: '부문별', rows: a }, { name: '사람별', rows: b }, { name: '정리', rows: c }], '심사비집계_' + App.today() + '.xlsx');
+}
+function importJudgeFile(file) {
+  App.readWorkbook(file).then(sheets => {
+    const guessYear = () => { const ds = D.plan.map(p => p.date).concat(D.sessions.map(s => s.date)).filter(Boolean).sort(); if (ds.length) return +ds[0].slice(0, 4); const n = new Date(); return n.getMonth() >= 8 ? n.getFullYear() + 1 : n.getFullYear(); };
+    let year = JL.detectYear(sheets, guessYear()) || guessYear();
+    const m = modal('<h2>심사위원 명단 불러오기</h2><p class="muted small">' + esc(file.name) + ' · 탭 ' + sheets.length + '개</p>' +
+      '<div class="row"><label class="f" for="jy" style="margin:0">연도</label><input id="jy" style="width:100px" inputmode="numeric" value="' + year + '"><span class="small muted">명단의 "3월25일"을 몇 년으로 볼지 — 적힌 요일에 맞는 해를 골라 뒀어요. 요일이 안 맞으면 아래에 알려 줘요</span></div>' +
+      '<div id="jpv" style="margin-top:12px"></div>' +
+      '<label class="inline" style="margin-top:10px"><input type="checkbox" id="jrm"> 이 파일에 없는 기존 심사위원은 지우기 (채점 기록이 있으면 남김)</label>' +
+      '<div class="row end" style="margin-top:12px"><button data-close>취소</button><button class="pri" id="jgo">불러오기</button></div>', { wide: true });
+    let R = null;
+    const draw = () => {
+      R = JL.parse(sheets, { year, cfg: D.cfg });
+      const cfg2 = Object.assign({}, D.cfg, R.rates ? { judgeRates: R.rates } : {});
+      const fee = r => KC.judgeDayFee(cfg2, r.round, r.date, r.shift, r.fee);
+      const ppl = new Set(R.rows.map(r => r.name + '|' + (r.phone || r.affiliation))).size, total = R.rows.reduce((a, r) => a + fee(r), 0);
+      const blocks = {}; R.rows.forEach(r => { const k = r.division + '|' + r.round + '|' + r.date; (blocks[k] = blocks[k] || { r, names: [], fees: [] }).names.push(r.name); blocks[k].fees.push(fee(r)); });
+      const bk = Object.keys(blocks).sort((a, b) => { const [da, ra, xa] = a.split('|'), [db, rb, xb] = b.split('|'); return divOrder(da) - divOrder(db) || KC.cmpKo(ra + xa, rb + xb); });
+      $('#jpv', m.el).innerHTML = (R.rows.length ? '<div class="note ok small">부문 탭 ' + R.blocks.length + '개 일정' + (R.flatSheet ? ' + <b>' + esc(R.flatSheet) + '</b> 탭(종일·반나절·심사비)' : '') + (R.rates ? ' + <b>' + esc(R.ratesSheet) + '</b> 탭(단가표)' : '') + ' · 연인원 <b>' + R.rows.length + '</b>명 · 실인원 약 <b>' + ppl + '</b>명 · 심사비 합계 <b>' + nf(total) + '</b>원</div>' : '<div class="note bad">읽을 수 있는 심사위원이 없어요. 부문 탭(예선 : 3월25일 / … 형식)이나 정리 탭(부문·구분·일자·이름 열)이 있는지 확인해 주세요.</div>') +
+        (R.warnings.length ? '<div class="note warn small" style="margin-top:8px"><b>확인해 주세요</b><ul style="margin:4px 0 0 18px;padding:0">' + R.warnings.map(w => '<li>' + esc(w) + '</li>').join('') + '</ul></div>' : '') +
+        (R.rates ? '<p class="small" style="margin:8px 0 0">단가표: ' + esc(R.rates.replace(/=(\d+)/g, (x, v) => ' ' + manw(+v))) + ' → 설정에 저장해요.</p>' : '') +
+        '<div class="scroll" style="margin-top:10px;max-height:46vh"><table class="gtab"><thead><tr><th>부문</th><th>라운드</th><th>날짜</th><th>도착</th><th>담당</th><th>심사위원</th><th class="n">1인 심사비</th></tr></thead><tbody>' +
+        bk.map(k => { const B = blocks[k], r = B.r, fs = [...new Set(B.fees)]; return '<tr><td><b>' + esc(r.division) + '</b></td><td>' + esc(rname(r.round)) + '</td><td>' + esc(fmtDate(r.date)) + '</td><td>' + esc(r.arrive || '') + '</td><td>' + esc(r.targets.length ? r.targets.join('·') : '부문 전체') + '</td><td style="white-space:normal;min-width:220px">' + B.names.map(esc).join(', ') + '</td><td class="n">' + fs.map(nf).join(' / ') + (r.shift ? ' <span class="small muted">' + esc(r.shift) + '</span>' : '') + '</td></tr>'; }).join('') +
+        '</tbody></table></div>';
+      $('#jgo', m.el).textContent = R.rows.length ? '연인원 ' + R.rows.length + '명 불러오기' : '불러오기';
+    };
+    draw();
+    $('#jy', m.el).addEventListener('change', e => { const y = +e.target.value; if (y > 2000 && y < 2100) { year = y; draw(); } });
+    $('#jgo', m.el).addEventListener('click', e => {
+      if (!R || !R.rows.length) { toast('불러올 심사위원이 없어요', 'bad'); return; }
+      busy(e.target, true);
+      call('importJudges', { rows: R.rows, rates: R.rates, removeMissing: $('#jrm', m.el).checked }).then(r => {
+        m.close(); JDRAFT = null;
+        toast('심사위원 ' + r.people + '명 — 새로 ' + r.added + '줄, 갱신 ' + r.updated + '줄' + (r.removed ? ', 지움 ' + r.removed : '') + (r.kept ? ' (채점 기록 있어 남김 ' + r.kept + ')' : '') + (r.staffAdded ? ' · 인력 명단에 ' + r.staffAdded + '명 추가' : ''), 'ok');
+        refresh();
+      }).catch(err => { busy(e.target, false); onErr(err); });
+    });
+  }).catch(e => toast('엑셀을 읽지 못했어요: ' + e.message, 'bad'));
 }
 function submissionTable(subs) {
   const ses = D.sessions.slice().sort((a, b) => KC.cmpKo(a.round + a.date + a.startTime, b.round + b.date + b.startTime));
@@ -745,16 +1067,16 @@ function fakeScores() {
 function settings() {
   const C = D.cfg;
   const F = [
-    ['기본', [['title', '대회 이름'], ['shortTitle', '짧은 이름'], ['organizer', '주최'], ['contact', '문의처'], ['venue', '기본 장소'], ['fee', '참가비(원)'], ['themeColor', '주조색 (#8a1c3c)']]],
+    ['기본', [['title', '대회 이름'], ['shortTitle', '짧은 이름'], ['organizer', '주최'], ['contact', '문의처'], ['venue', '기본 장소'], ['fee', '참가비(원)'], ['themeColor', '주조색 (#8a1c3c)'], ['payMode', '결제 방식 — va: 가상계좌(파일의 결제 상태 그대로) / match: 통장 입금대조'], ['applyEnd', '접수 마감일 (현황 그래프 기준, 예: 2027-02-26)']]],
     ['로그인', [['adminPassword', '관리자 비밀번호'], ['deskPin', '현장 진행요원 PIN']]],
-    ['편성', [['groupSize', '조당 기본 인원'], ['perSec', '1인 배당 시간(초)'], ['drawLeadMin', '추첨은 시작 몇 분 전'], ['splitByGender', '남/여 나눠 편성할 부문 (쉼표)'], ['farRegions', '지방(오후 조 배치) 시·도 (쉼표)'], ['farExceptions', '지방에서 뺄 지명 (예: 춘천)'], ['afternoonFrom', '오후 조 기준 시각 (예: 12:00)']]],
+    ['편성', [['groupSize', '조당 최대 인원 (예: 15)'], ['balanceGroups', '고르게 나누기 Y/N (100명·15명 → 15·15·14·14·14·14·14)'], ['perSec', '1인 배당 시간(초)'], ['drawLeadMin', '추첨은 시작 몇 분 전'], ['splitByGender', '남/여 나눠 편성할 부문 (쉼표)'], ['farRegions', '지방(오후 조 배치) 시·도 (쉼표)'], ['farExceptions', '지방에서 뺄 지명 (예: 춘천)'], ['afternoonFrom', '오후 조 기준 시각 (예: 12:00)']]],
     ['공지 문구 (홈페이지 게시판용)', [['noticeR1Body', '예선 조편성 공지 머리글 — {대회명} {부문안내}'], ['noticeDivisionLines', '부문별 추가 안내 (부문=문구, 한 줄에 하나)'], ['noticeFinalistBody', '본선 진출자 공지 — {명단} {본선일자} {문의시작}'], ['noticeFinalGuideBody', '본선 안내 공지 — {시간표} {명단} {본선일자}'], ['noticeWinnersBody', '입상자 공지 — {입상자} {인터뷰마감}'], ['pubCountR1', '공개용 예선 시간표에 인원 표시 (Y/N)'], ['pubCountR2', '공개용 본선 시간표에 인원 표시 (Y/N)']]],
-    ['시간표 기본값', [['roundMin', '조 경연시간 올림 단위(분)'], ['sessionGap', '조 사이 쉬는 시간(분)'], ['amEnd', '오전 마감'], ['pmStart', '오후 시작'], ['lunchMin', '점심 최소(분)'], ['minGroupSize', '오전 마지막 조 최소 인원'], ['dayLatest', '이보다 늦게 끝나면 경고'], ['perSec2', '본선 1인 기본 시간(초)'], ['groupSize2', '본선 조당 기본 인원'], ['calendarNote', '달력 아래 메모 (학력평가 일정 등)']]],
+    ['시간표 기본값', [['roundMin', '조 경연시간 올림 단위(분)'], ['sessionGap', '조 사이 쉬는 시간(분)'], ['minGap', '조 사이 최소(분) — 이보다 짧으면 경고'], ['breakMin', '이만큼(분) 이상 비면 시간표에 \'쉬는 시간\'으로'], ['maxRunMin', '쉬지 않고 이어가는 최대(분) — 비우면 안 봄'], ['midScoreMin', '중간채점 날 점심 더하기(분)'], ['amEnd', '오전 마감'], ['pmStart', '오후 시작'], ['lunchMin', '점심 최소(분)'], ['minGroupSize', '오전 마지막 조 최소 인원'], ['dayLatest', '이보다 늦게 끝나면 경고'], ['perSecTable', '예선 1인 시간 기본값 (75회: 피아노=3:20, 첼로 초등부=3:30 …)'], ['perSecTable2', '본선 1인 시간 기본값 (75회: 피아노 고등부=20:00 …)'], ['perSec2', '본선 1인 기본 시간(초)'], ['groupSize2', '본선 조당 기본 인원'], ['calendarNote', '달력 아래 메모 (학력평가 일정 등)']]],
     [C.r1Name + ' 심사', [['r1Name', '라운드 이름'], ['r1Mode', '방식 (ox / rank / score)'], ['r1Judges', '심사위원 수'], ['r1Max', '최대값 (ox는 1)'], ['r1Drop', '최고·최하 몇 개씩 제외']]],
     [C.r2Name + ' 심사', [['r2Name', '라운드 이름'], ['r2Mode', '방식 (ox / rank / score)'], ['r2Judges', '심사위원 수'], ['r2Max', '최하 등위 (예: 5)'], ['r2Drop', '최고·최하 몇 개씩 제외']]],
     ['문서·공문 (공결공문·확인서·계약서)', [['ceoTitle', '발신 명의 (예: 경향신문사 사장)'], ['ceoName', '사장 이름 (발급일 기준 현직)'], ['ceoNameEn', '영문 사장 이름 (영문 증명서)'], ['hostLine', '주최 표기'], ['eventPeriod', '대회 기간 (비우면 일정에서 자동)'], ['venueShort', '장소 (공문용)'], ['venueFull', '장소 상세 (심사 요청 공문)'], ['deptName', '담당 부서'], ['manager', '담당자 이름'], ['phone', '전화'], ['fax', '팩스'], ['email', '이메일'], ['companyAddress', '회사 주소'], ['homepage', '홈페이지'], ['docNoFormat', '공문 번호 형식 — {yyyy}{yy}{MM}{NN}'], ['certNoFormat', '확인서 번호 형식'], ['awardDate', '시상일 (입상확인서, 2027-05-06)'], ['sealOverlay', '직인을 이름 끝에 겹쳐 찍기 (Y/N)'], ['sealSizeMm', '직인 크기(mm)'], ['sealDxMm', '직인 가로 위치(mm, 왼쪽 -)'], ['sealDyMm', '직인 세로 위치(mm, 위쪽 -)']]],
     ['공결공문 · 상금', [['gonggyeolOpen', '참가자 공결공문 신청 받기 (Y/N)'], ['gonggyeolNote', '신청 화면 안내문'], ['prizeDefault', '기본 상금표 (1위=1000000,2위=500000)'], ['prizeOpen', '입상자 계좌 입력 받기 (Y/N)'], ['prizeDue', '계좌 입력 마감 (안내문)'], ['awardCeremony', '시상식 안내 (예: 5월 6일(목) 오후 3시, 이화여고 백주년기념관)']]],
-    ['심사비 · 인건비 · 세금', [['judgeFee', '1일 심사비(원)'], ['hourlyWage', '진행요원 시급(원) — 2027년 최저임금 10,700원'], ['payDay', '급여 지급일 (계약서 문구)'], ['workDept', '근무 부서'], ['workPlace', '근무 장소'], ['workDuty', '업무 내용'], ['defaultBreakMin', '8시간 이상 근무 시 휴게(분)'], ['taxJudgeExpense', '심사비 필요경비율(%) — 일시적 인적용역 60'], ['taxPrizeExpense', '상금 필요경비율(%) — 순위 경쟁 상금 80'], ['taxRate', '기타소득 세율(%)'], ['localTaxRate', '지방소득세(소득세의 %)'], ['taxMinIncome', '과세최저한 (기타소득금액, 원)']]],
+    ['심사비 · 인건비 · 세금', [['judgeRates', '심사비 단가표 — 명단 엑셀의 심사비 탭에서 자동으로 채워져요'], ['judgeFee', '1일 심사비(원) — 단가표가 비었을 때'], ['hourlyWage', '진행요원 시급(원) — 2027년 최저임금 10,700원'], ['payDay', '급여 지급일 (계약서 문구)'], ['workDept', '근무 부서'], ['workPlace', '근무 장소'], ['workDuty', '업무 내용'], ['defaultBreakMin', '8시간 이상 근무 시 휴게(분)'], ['taxJudgeExpense', '심사비 필요경비율(%) — 일시적 인적용역 60'], ['taxPrizeExpense', '상금 필요경비율(%) — 순위 경쟁 상금 80'], ['taxRate', '기타소득 세율(%)'], ['localTaxRate', '지방소득세(소득세의 %)'], ['taxMinIncome', '과세최저한 (기타소득금액, 원)']]],
     ['개인정보 수집', [['collectRrn', '주민등록번호 받기 (Y/N) — 원천징수에 필요'], ['collectIdCopy', '신분증 사본 받기 (Y/N)']]],
     ['참가자 화면', [['notice', '상단 공지'], ['receiptNote', '접수증 안내문'], ['showCutline', '예선 커트라인 안내 (Y/N)'], ['showNamesToJudges', '심사위원에게 이름 표시 (Y/N)']]],
     ['곡목 (성악 등 자유곡 부문)', [['showPiecesToJudges', '심사위원에게 곡목 표시 (Y/N)'], ['pieceEditDivisions', '참가자가 곡목을 고칠 수 있는 부문 (쉼표, 비우면 전체)'], ['pieceEditR1', C.r1Name + ' 곡목 수정 허용 (Y/N)'], ['pieceEditR2', C.r2Name + ' 곡목 수정 허용 (Y/N) — 예선 결과 공개 후 진출자만'], ['pieceEditUntil', '수정 마감 일시 (예: 2027-04-05 18:00, 비우면 채점 시작 전까지)'], ['pieceReorder', '참가자가 곡 순서(①②③) 바꾸기 허용 (Y/N)']]]

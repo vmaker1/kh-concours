@@ -199,6 +199,50 @@ var DF = (function () {
     });
   }
 
-  return { fill: fill, fieldsOf: fieldsOf, env: env };
+  /* 줄 단위 워드 (벽보용 시간표): 기본 양식의 용지·여백만 쓰고 본문은 새로 씀 */
+  function xe(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function lrun(text, size, bold, color) {
+    return '<w:r><w:rPr><w:rFonts w:ascii="Nanum Gothic" w:eastAsia="Nanum Gothic" w:hAnsi="Nanum Gothic"/>' + (bold ? '<w:b/>' : '') + '<w:color w:val="' + (color || '000000') + '"/><w:sz w:val="' + Math.round(size * 2) + '"/><w:szCs w:val="' + Math.round(size * 2) + '"/></w:rPr><w:t xml:space="preserve">' + xe(text) + '</w:t></w:r>';
+  }
+  function lpara(text, size, bold, color, pb) { return '<w:p><w:pPr>' + (pb ? '<w:pageBreakBefore/>' : '') + '<w:spacing w:before="0" w:after="80"/></w:pPr>' + (text ? lrun(text, size, bold, color) : '') + '</w:p>'; }
+  function linesBody(pages) {
+    var SZ = { bm: 10, title: 26, date: 20, group: 22, per: 16, row: 20 }, W = [4500, 3100, 1800], out = '';
+    var NIL = '<w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/>';
+    (pages || []).forEach(function (pg, pi) {
+      var buf = [];
+      var flush = function () {
+        if (!buf.length) return;
+        out += '<w:tbl><w:tblPr><w:tblW w:w="' + W.reduce(function (a, b) { return a + b; }, 0) + '" w:type="dxa"/><w:tblBorders>' + NIL + '</w:tblBorders><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>' + W.map(function (w) { return '<w:gridCol w:w="' + w + '"/>'; }).join('') + '</w:tblGrid>' +
+          buf.map(function (l) { return '<w:tr>' + l.c.map(function (c, i) { return '<w:tc><w:tcPr><w:tcW w:w="' + W[i] + '" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:spacing w:before="20" w:after="20"/></w:pPr>' + (c ? lrun(c, SZ.row, l.k === 'lunch') : '') + '</w:p></w:tc>'; }).join('') + '</w:tr>'; }).join('') + '</w:tbl>';
+        buf = [];
+      };
+      out += lpara((pg.fields || {}).날짜 || '', SZ.bm, false, '888888', pi > 0);
+      (pg.lines || []).forEach(function (l) {
+        if (l.k === 'session' || l.k === 'lunch') { buf.push(l); return; }
+        flush();
+        if (l.k === 'gap') out += lpara('', SZ.row);
+        else if (l.k === 'title') out += lpara(l.t, SZ.title, true);
+        else if (l.k === 'date') out += lpara(l.t, SZ.date, false);
+        else if (l.k === 'group') out += lpara(l.t, SZ.group, true);
+        else if (l.k === 'per') out += lpara(l.t, SZ.per, false, '333333');
+      });
+      flush();
+    });
+    return out;
+  }
+  function linesDocx(buf, data, opt) {
+    opt = opt || {};
+    var JSZip = env.JSZip;
+    return JSZip.loadAsync(buf).then(function (zip) {
+      return zip.file('word/document.xml').async('string').then(function (xml) {
+        var sect = (/<w:sectPr[\s\S]*?<\/w:sectPr>(?![\s\S]*<w:sectPr)/.exec(xml) || [''])[0];
+        xml = xml.replace(/<w:body>[\s\S]*<\/w:body>/, function () { return '<w:body>' + linesBody(data.pages) + sect + '</w:body>'; });
+        zip.file('word/document.xml', xml);
+        return zip.generateAsync({ compression: 'DEFLATE', type: opt.type || (typeof Blob !== 'undefined' && typeof window !== 'undefined' ? 'blob' : 'uint8array'), mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      });
+    });
+  }
+
+  return { fill: fill, fieldsOf: fieldsOf, env: env, linesDocx: linesDocx, linesBody: linesBody };
 })();
 if (typeof module !== 'undefined') module.exports = DF;

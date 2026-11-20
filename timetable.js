@@ -12,17 +12,26 @@ var TT = (function () {
   function split(gk) { var p = String(gk).split('|'); return { div: p[0], cat: p[1] || '' }; }
   function roundName(info, r) { return r === 'R2' ? (info.r2Name || '본선') : (info.r1Name || '예선'); }
 
-  /* 세션 목록 → 날짜별 시간표 (조 사이 30분 이상 빈 첫 구간을 점심시간으로 표시) */
-  function buildDays(list, plan) {
+  /* 세션 목록 → 날짜별 시간표
+   *  점심: 30분 이상 빈 구간 가운데 12:30에 가장 가까운 것 (앞뒤로 부문이 바뀌면 '중간채점')
+   *  쉬는 시간: 그 밖에 breakMin(15)분 이상 빈 구간 */
+  function buildDays(list, plan, opt) {
+    var brk = +((opt || {}).breakMin) || 15;
     var by = {};
     list.forEach(function (s) { var k = s.round + '|' + s.date; (by[k] = by[k] || { round: s.round, date: s.date, ses: [] }).ses.push(s); });
     return Object.keys(by).sort().map(function (k) {
       var d = by[k];
       d.ses.sort(function (a, b) { return a.startTime < b.startTime ? -1 : a.startTime > b.startTime ? 1 : 0; });
       var p = (plan || []).filter(function (x) { return x.round === d.round && x.date === d.date; })[0] || {};
-      var rows = [], prevG = null, prevEnd = null, lunchDone = false;
-      d.ses.forEach(function (s) {
-        if (prevEnd && !lunchDone && toMin(s.startTime) - toMin(prevEnd) >= 30) { rows.push({ type: 'lunch', start: prevEnd, end: s.startTime }); lunchDone = true; }
+      var rows = [], prevG = null, prevEnd = null, lunchI = -1, best = 1e9;
+      d.ses.forEach(function (s, i) {
+        if (!i) return; var a = d.ses[i - 1], g = toMin(s.startTime) - toMin(a.endTime);
+        if (g >= 30) { var dist = Math.abs((toMin(a.endTime) + toMin(s.startTime)) / 2 - 750); if (dist < best) { best = dist; lunchI = i; } }
+      });
+      d.ses.forEach(function (s, i) {
+        var g = i ? toMin(s.startTime) - toMin(prevEnd) : 0;
+        if (i === lunchI) rows.push({ type: 'lunch', start: prevEnd, end: s.startTime, note: split(d.ses[i - 1].groupKey).div !== split(s.groupKey).div ? '중간채점' : '' });
+        else if (i && g >= brk) rows.push({ type: 'break', start: prevEnd, end: s.startTime });
         if (s.groupKey !== prevG) {
           rows.push({ type: 'group', groupKey: s.groupKey, perSec: s.perSec, total: d.ses.filter(function (x) { return x.groupKey === s.groupKey; }).reduce(function (a, x) { return a + (+x.count || 0); }, 0) });
           prevG = s.groupKey;
@@ -51,7 +60,8 @@ var TT = (function () {
     var L = [{ k: 'title', t: info.title || '' }, { k: 'date', t: roundName(info, day.round) + ' : ' + dayTitle(day.date), sub: '(' + day.start + '~' + day.end + ')' }];
     var prevDiv = null;
     day.rows.forEach(function (r) {
-      if (r.type === 'lunch') { L.push({ k: 'lunch', c: ['점심시간', r.start + ' ~ ' + r.end, ''] }); return; }
+      if (r.type === 'lunch') { L.push({ k: 'lunch', c: ['점심시간', r.start + ' ~ ' + r.end, internal && r.note ? '(' + r.note + ')' : ''] }); return; }
+      if (r.type === 'break') { L.push({ k: 'lunch', c: ['쉬는 시간', r.start + ' ~ ' + r.end, ''] }); return; }
       if (r.type === 'group') {
         var g = split(r.groupKey);
         if (!r2) { L.push({ k: 'group', t: g.div + ' / ' + g.cat + (showCount ? ' / ' + r.total + '명' : ''), sub: internal && r.perSec ? '(' + secText(r.perSec) + ')' : '' }); return; }
@@ -205,12 +215,96 @@ var TT = (function () {
     });
     return rows;
   }
-  var CSS = '.ttd{font-size:15px;line-height:1.75;padding:18px 0;border-bottom:1px dashed var(--line,#ccc)}.ttd-top{font-weight:700;font-size:17px}.ttd-date{margin:4px 0 10px}.ttd-date span{color:var(--sub,#555)}' +
+  var CSS = '.ttw{background:#fff;color:#000;padding:16px 22px;margin:0 0 12px;border:1px solid #ddd;font-size:17px;line-height:1.5}.ttw .bm{font-size:11px;color:#888}.ttw .t{font-size:22px;font-weight:800}.ttw .d{font-size:17px}.ttw .g{font-size:19px;font-weight:800}.ttw .p{font-size:14px;color:#333}.ttw .gp{height:10px}.ttw .s{display:grid;grid-template-columns:12em 9em 5em;font-variant-numeric:tabular-nums}.ttw .s.l{font-weight:800}' +
+    '@media print{.ttw{border:0;margin:0;padding:0;font-size:20pt}.ttw .t{font-size:26pt}.ttw .d{font-size:20pt}.ttw .g{font-size:23pt}.ttw .p{font-size:16pt}.ttw .gp{height:6mm}.ttw .bm{font-size:9pt}}' +
+    '.ttd{font-size:15px;line-height:1.75;padding:18px 0;border-bottom:1px dashed var(--line,#ccc)}.ttd-top{font-weight:700;font-size:17px}.ttd-date{margin:4px 0 10px}.ttd-date span{color:var(--sub,#555)}' +
     '.ttd-p{color:var(--sub,#555);font-size:14px}.ttd-g{font-weight:800;margin-top:10px}.ttd-g span{font-weight:600;color:var(--sub,#555)}.ttd-s,.ttd-l{display:grid;grid-template-columns:9.5em 9em 4.5em auto;gap:6px;font-variant-numeric:tabular-nums}.ttd-l{color:var(--accent,#8a1c3c);font-weight:700;margin:6px 0}.ttd-s .dr{color:var(--sub,#666);font-size:13px}.ttd-foot{margin-top:12px;font-size:13px;color:var(--sub,#555)}' +
     '.ttx th,.ttx td{white-space:nowrap}.ttc table{table-layout:fixed;width:100%;border-collapse:collapse}.ttc th,.ttc td{border:1px solid #999;vertical-align:top;padding:4px 5px;font-size:12px;line-height:1.45;position:static;background:#fff;color:#000}.ttc th{background:#eee;text-align:center}' +
     '.ttc td{height:92px}.ttc td .dn{font-weight:700}.ttc td.on{background:#fbf3f6}.ttc .sun .dn,.ttc th.sun{color:#c00}.ttc .sat .dn,.ttc th.sat{color:#1a4fb4}.ttc .tm{font-size:11px;color:#444}.ttc .cd{font-weight:700}.ttc .pn{color:#8a1c3c;font-size:11px}.ttc .nt{color:#555;font-size:11px}' +
     '.ttc-t{font-weight:800;font-size:18px;margin-bottom:8px}.ttc-t span{font-weight:500;font-size:13px;color:#666}.ttc-n{margin-top:8px;font-size:12px;color:#333}' +
     '@media(max-width:600px){.ttd-s,.ttd-l{grid-template-columns:auto 7.6em 3.4em;font-size:14px;gap:8px}.ttd-s span:first-child,.ttd-l span:first-child{white-space:nowrap}.ttd-s .dr{grid-column:1/-1;margin-top:-4px}}' +
     '@media print{.ttd{border:0;page-break-after:always;break-after:page;font-size:13pt}.ttd:last-child{page-break-after:auto}}';
-  return { buildDays: buildDays, sessionsFromPlan: sessionsFromPlan, dayDoc: dayDoc, dayText: dayText, dayLines: dayLines, roundName: roundName, split: split, detailRows: detailRows, detailTable: detailTable, calendar: calendar, calendarAOA: calendarAOA, docAOA: docAOA, CSS: CSS, dayTitle: dayTitle, shortDate: shortDate, secText: secText, secShort: secShort };
+  /* ③ 벽보용 (75회 '예선시간표(종합)'·'본선시간표(종합)' 구글 문서 그대로) — 한 장 = 하루(예선) 또는 하루의 한 부문(본선)
+   *  예선: 제75회 이화경향음악콩쿠르 / 예선 : 3월25일 수요일 (09:30~16:50) / 피아노 / 중등부 / 100명 (3분20초) / 중등부 1조 09:30 ~ 10:40 / 20명 …
+   *        작은 부문은 한 머리로: 클라리넷 / 초(14)중(17)고등부(29) / 60명 (3분)
+   *  본선: 제75회 … / 피아노 / 본선 : 4월9일 목요일 (10:00~16:20) / 초(7분), 중(8분), 고(20분) / 초등부 1조 10:00 ~ 10:50 / 7명 …
+   *  opt.split: 예선에 부문이 둘 이상인 날은 부문별 장도 함께 (방 문 앞에 붙일 것) */
+  function catShort(c) { return String(c).replace(/\((남|여)\)/, '').replace(/등부|학부/, '').replace(/^대학일반부?$|^대학·일반부?$/, '대학·일반').replace(/부$/, ''); }
+  function bookmark(d, divs) { var x = dt(d.date); return (x ? (x.getMonth() + 1) + '.' + x.getDate() : d.date) + '.' + divs.map(function (v) { return v.div + (v.cats.length && d.round !== 'R2' ? '.' + v.cats.map(catShort).filter(function (c, i, a) { return a.indexOf(c) === i; }).join('_') : ''); }).join('_'); }
+  function wallPages(days, info, opt) {
+    opt = opt || {};
+    var title = info.title || '', pages = [];
+    days.forEach(function (day) {
+      var r2 = day.round === 'R2', divs = [];
+      day.ses.forEach(function (s) { var g = split(s.groupKey), v = divs.filter(function (x) { return x.div === g.div; })[0]; if (!v) { v = { div: g.div, cats: [], keys: [] }; divs.push(v); } if (v.keys.indexOf(s.groupKey) < 0) { v.keys.push(s.groupKey); v.cats.push(g.cat); } });
+      var lunch = day.rows.filter(function (r) { return r.type === 'lunch'; })[0], rests = day.rows.filter(function (r) { return r.type === 'break'; });
+      function sesLine(s) {
+        var g = split(s.groupKey), multi = day.ses.filter(function (x) { return x.groupKey === s.groupKey; }).length > 1;
+        return { k: 'session', c: [g.cat + (r2 && !multi ? '' : ' ' + (s.label || s.no + '조')), s.startTime + ' ~ ' + s.endTime, '/ ' + s.count + '명'] };
+      }
+      function groupHead(v, ses) {   // 예선: 부문 머리 (작은 구분은 한 머리로 묶음)
+        var tot = {}, per = {}; ses.forEach(function (s) { tot[s.groupKey] = (tot[s.groupKey] || 0) + (+s.count || 0); per[s.groupKey] = per[s.groupKey] || s.perSec; });
+        var ks = Object.keys(tot), all = ks.reduce(function (a, k) { return a + tot[k]; }, 0);
+        var pers = ks.map(function (k) { return per[k]; }).filter(function (x, i, a) { return x && a.indexOf(x) === i; });
+        var ps = pers.length === 1 ? ' (' + secText(pers[0]) + ')' : '';
+        if (ks.length > 1 && ks.every(function (k) { return tot[k] <= (+opt.mergeMax || 30); }))
+          return [{ k: 'group', t: v.div + ' / ' + ks.map(function (k, i) { var c = split(k).cat; return (i < ks.length - 1 ? catShort(c) : c) + '(' + tot[k] + ')'; }).join('') + ' / ' + all + '명' + ps }];
+        return null;
+      }
+      function body(sel) {   // sel: 이 장에 넣을 세션
+        var L = [], prev = null, shownLunch = false, merged = {};
+        var first = sel[0], last = sel[sel.length - 1];
+        sel.forEach(function (s, i) {
+          var g = split(s.groupKey);
+          if (lunch && !shownLunch && s.startTime >= lunch.end && (i > 0 || sel.length < day.ses.length)) { if (L.length) L.push({ k: 'gap' }); L.push({ k: 'lunch', c: ['점심시간', lunch.start + ' ~ ' + lunch.end, ''] }); L.push({ k: 'gap' }); shownLunch = true; }
+          if (!r2 && s.groupKey !== prev) {
+            var v = divs.filter(function (x) { return x.div === g.div; })[0], same = sel.filter(function (x) { return split(x.groupKey).div === g.div; });
+            if (merged[g.div] == null) merged[g.div] = groupHead(v, same) || false;
+            if (merged[g.div] === false) {
+              var gs = sel.filter(function (x) { return x.groupKey === s.groupKey; });
+              if (L.length && L[L.length - 1].k !== 'gap') L.push({ k: 'gap' });
+              L.push({ k: 'group', t: g.div + ' / ' + g.cat + ' / ' + gs.reduce(function (a, x) { return a + (+x.count || 0); }, 0) + '명' + (s.perSec ? ' (' + secText(s.perSec) + ')' : '') }); L.push({ k: 'gap' });
+            } else if (merged[g.div] !== true) { if (L.length && L[L.length - 1].k !== 'gap') L.push({ k: 'gap' }); L.push(merged[g.div][0]); L.push({ k: 'gap' }); merged[g.div] = true; }
+          }
+          var rb = i > 0 && rests.filter(function (r) { return r.end === s.startTime && r.start === sel[i - 1].endTime; })[0];
+          if (rb) { var last = L.pop(); if (last.k === 'gap') { L.push({ k: 'lunch', c: ['쉬는 시간', rb.start + ' ~ ' + rb.end, ''] }); L.push(last); } else { L.push(last); L.push({ k: 'lunch', c: ['쉬는 시간', rb.start + ' ~ ' + rb.end, ''] }); } }
+          L.push(sesLine(s)); prev = s.groupKey;
+        });
+        return { lines: L, start: first.startTime, end: last.endTime };
+      }
+      function head(d0, b, divLabel) {
+        var date = { k: 'date', t: roundName(info, day.round) + ' : ' + dayTitle(day.date) + ' (' + b.start + '~' + b.end + ')' };
+        if (!r2) return [{ k: 'title', t: title }, { k: 'gap' }, date, { k: 'gap' }];
+        var seen = [], parts = [];
+        day.ses.forEach(function (s) { var x = split(s.groupKey); if (x.div === divLabel && seen.indexOf(catShort(x.cat)) < 0) { seen.push(catShort(x.cat)); parts.push(catShort(x.cat) + '(' + secText(s.perSec) + ')'); } });
+        return [{ k: 'title', t: title }, { k: 'gap' }, { k: 'group', t: divLabel }, date, { k: 'per', t: parts.join(', ') }, { k: 'gap' }];
+      }
+      if (r2) {
+        divs.forEach(function (v) { var b = body(day.ses.filter(function (s) { return split(s.groupKey).div === v.div; })); pages.push({ bookmark: bookmark(day, [v]).replace('.', ' ').replace(/^(\d+) (\d+)\./, '$1.$2 '), lines: head(day, b, v.div).concat(b.lines) }); });
+        return;
+      }
+      var all = body(day.ses);
+      pages.push({ bookmark: bookmark(day, divs), lines: head(day, all).concat(all.lines) });
+      if (opt.split !== false && divs.length > 1) divs.forEach(function (v) {
+        var b = body(day.ses.filter(function (s) { return split(s.groupKey).div === v.div; }));
+        pages.push({ bookmark: bookmark(day, [v]), lines: head(day, b).concat(b.lines), part: true });
+      });
+    });
+    return pages;
+  }
+  function wallHTML(pages) {
+    return pages.map(function (p) {
+      return '<section class="ttw pg"><div class="bm">' + esc(p.bookmark) + '</div>' + p.lines.map(function (l) {
+        if (l.k === 'gap') return '<div class="gp"></div>';
+        if (l.k === 'title') return '<div class="t">' + esc(l.t) + '</div>';
+        if (l.k === 'date') return '<div class="d">' + esc(l.t) + '</div>';
+        if (l.k === 'group') return '<div class="g">' + esc(l.t) + '</div>';
+        if (l.k === 'per') return '<div class="p">' + esc(l.t) + '</div>';
+        return '<div class="s' + (l.k === 'lunch' ? ' l' : '') + '"><span>' + esc(l.c[0]) + '</span><span>' + esc(l.c[1]) + '</span><span>' + esc(l.c[2]) + '</span></div>';
+      }).join('') + '</section>';
+    }).join('');
+  }
+
+  return { wallPages: wallPages, wallHTML: wallHTML, buildDays: buildDays, sessionsFromPlan: sessionsFromPlan, dayDoc: dayDoc, dayText: dayText, dayLines: dayLines, roundName: roundName, split: split, detailRows: detailRows, detailTable: detailTable, calendar: calendar, calendarAOA: calendarAOA, docAOA: docAOA, CSS: CSS, dayTitle: dayTitle, shortDate: shortDate, secText: secText, secShort: secShort };
 })();
+if (typeof module !== 'undefined') module.exports = TT;

@@ -109,18 +109,23 @@ var ADMX = (function () {
     var rounds = ['R1', 'R2'].filter(function (r) { return d.sessions.some(function (s) { return s.round === r; }); });
     var divs = [], gks = [];
     d.groupKeys.forEach(function (k) { var dv = k.split('|')[0]; if (divs.indexOf(dv) < 0) divs.push(dv); gks.push(k); });
-    var needRound = /^(tt_public|tt_ops|att_group|att_perf|pieces|score_ox|score_rank|results)$/.test(kind);
+    var needRound = /^(tt_public|tt_ops|tt_wall|att_group|att_perf|pieces|score_ox|score_rank|results)$/.test(kind);
     var needGroup = /^(att_group|att_perf|pieces|score_ox|score_rank|results|photo_agree)$/.test(kind);
     var people = /^(judge_cert|judge_request|pay_judge)$/.test(kind) ? (d.judgePeople || []).map(function (P) { return { id: P.staffId || P.key, label: P.name + (P.affiliation ? ' · ' + P.affiliation : '') + ' — ' + P.days.length + '일' }; })
       : /^(judge_agree)$/.test(kind) ? d.staff.filter(function (x) { return x.kind === 'judge'; }).map(function (x) { return { id: x.staffId, label: x.name + (x.submittedAt ? ' (제출)' : ' (미제출)') }; })
       : /^(contract|pledge|pay_staff)$/.test(kind) ? d.staff.filter(function (x) { return x.kind === 'staff'; }).map(function (x) { return { id: x.staffId, label: x.name + (x.contractAt ? ' (서명)' : ' (서명 전)') }; })
-      : /^(award_cert|award_cert_en|pay_prize)$/.test(kind) ? FM.winners(d).map(function (w) { return { id: w.pid, label: w.p.name + ' · ' + KC.groupLabel(w.groupKey) + ' ' + w.award }; }) : null;
-    var pkey = /^(judge_cert|judge_request|pay_judge)$/.test(kind) ? 'people' : /^(judge_agree|contract|pledge|pay_staff)$/.test(kind) ? 'staffIds' : 'pids';
+      : /^(award_cert|award_cert_en|pay_prize)$/.test(kind) ? FM.winners(d).map(function (w) { return { id: w.pid, label: w.p.name + ' · ' + KC.groupLabel(w.groupKey) + ' ' + w.award }; })
+      : kind === 'score_ox' ? d.judges.filter(function (j) { return j.round === 'R1'; }).sort(function (a, b) { return KC.groupKeyCmp(String(a.groups).split(/[|,\s]/)[0], String(b.groups).split(/[|,\s]/)[0]) || (+a.seat || 99) - (+b.seat || 99); }).map(function (j) { return { id: j.judgeId, label: j.name + ' · ' + String(j.groups || '전체').replace(/\|/g, ' ') }; }) : null;
+    if (people && !people.length) people = null;
+    var pkey = /^(judge_cert|judge_request|pay_judge)$/.test(kind) ? 'people' : /^(judge_agree|contract|pledge|pay_staff)$/.test(kind) ? 'staffIds' : kind === 'score_ox' ? 'judgeIds' : 'pids';
+    var oxDays = kind === 'score_ox' ? (function () { var m = {}; d.sessions.forEach(function (x) { if (x.round === 'R1' && x.date) m[x.date] = 1; }); d.judges.forEach(function (j) { if (j.round === 'R1') String(j.dates || '').split(/[,\s]+/).filter(Boolean).forEach(function (x) { m[x] = 1; }); }); return Object.keys(m).sort(); })() : [];
     if (people && !st[pkey]) st[pkey] = people.map(function (x) { return x.id; });
     var h = '<h2>' + esc(F.name) + '</h2><div class="grid g3" style="gap:10px">' +
       (needRound ? '<div><label class="f">라운드</label><select data-o="round">' + (rounds.length ? rounds : ['R1']).map(function (r) { return '<option value="' + r + '" ' + (st.round === r ? 'selected' : '') + '>' + esc(A().rname(r)) + '</option>'; }).join('') + '</select></div>' : '') +
       (needGroup ? '<div><label class="f">부문</label><select data-o="groupKey"><option value="">전체</option>' + divs.map(function (x) { return '<option value="' + esc(x) + '">' + esc(x) + ' (전체)</option>'; }).join('') + gks.map(function (k) { return '<option value="' + esc(k) + '">' + esc(KC.groupLabel(k)) + '</option>'; }).join('') + '</select></div>' : '') +
-      (/^(score_ox|score_rank)$/.test(kind) ? '<div><label class="f">심사위원별</label><select data-o="perJudge"><option value="">조마다 1장 (이름 빈칸)</option><option value="1">심사위원마다 1장씩</option></select></div>' : '') +
+      (kind === 'score_rank' ? '<div><label class="f">심사위원별</label><select data-o="perJudge"><option value="">조마다 1장 (이름 빈칸)</option><option value="1">심사위원마다 1장씩</option></select></div>' : '') +
+      (kind === 'tt_wall' ? '<div><label class="f">부문별 장</label><select data-o="wsplit"><option value="">같이 (예선에 부문이 둘 이상인 날)</option><option value="N">하루 한 장만</option></select></div>' : '') +
+      (kind === 'score_ox' ? '<div><label class="f">심사일</label><select data-o="day"><option value="">전체 날짜</option>' + oxDays.map(function (x) { return '<option value="' + esc(x) + '">' + esc(FM.mdw(x)) + '</option>'; }).join('') + '</select></div>' : '') +
       (F.type === 'doc' ? '<div><label class="f">' + (F.series ? '발급일·시행일' : '작성일') + '</label><input type="date" data-o="date" value="' + esc(st.date) + '"></div>' : '') +
       (F.series ? '<div><label class="f">시작 번호</label><input data-o="startNo" inputmode="numeric" placeholder="자동"></div>' : '') +
       (kind === 'photo_agree' ? '<div><label class="f">반주자용 빈 양식 장수</label><input data-o="blank" inputmode="numeric" value="0"></div><div><label class="f">본선 진출자 이름 채우기</label><select data-o="blankOnly"><option value="">채움</option><option value="1">빈 양식만</option></select></div>' : '') +
@@ -140,7 +145,7 @@ var ADMX = (function () {
     var m = modal(h, { wide: true });
     var data = null;
     function opts() {
-      var o = { date: st.date, round: needRound ? st.round : '', groupKey: st.groupKey || '', perJudge: !!st.perJudge, startNo: +st.startNo || 0, edits: st.edits, requests: st.requests, blank: +st.blank || 0, blankOnly: !!st.blankOnly, en: st.en || {} };
+      var o = { date: st.date, round: needRound ? st.round : '', groupKey: st.groupKey || '', perJudge: !!st.perJudge, dates: st.day ? [st.day] : null, split: st.wsplit !== 'N', sessions: st.sessions || null, startNo: +st.startNo || 0, edits: st.edits, requests: st.requests, blank: +st.blank || 0, blankOnly: !!st.blankOnly, en: st.en || {} };
       if (people) o[pkey] = st[pkey] && st[pkey].length ? st[pkey] : ['__none__'];
       if (st.manualText) o.manual = String(st.manualText).split('\n').map(function (ln) { var c = ln.split(',').map(function (x) { return x.trim(); }); return c[0] ? { name: c[0], birth: c[1], school: c[2], div: c[3], cat: c[4], award: c[5], date: c[6], edition: c[7], awardDate: c[8] } : null; }).filter(Boolean);
       if (kind === 'award_cert' && o.manual && o.manual.length && st.pids && !st.pids.length) o.pids = ['__none__'];
@@ -154,7 +159,8 @@ var ADMX = (function () {
       else if (ed && data.pages) {
         hh += '<div class="scroll" style="margin-top:8px;max-height:40vh"><table class="small"><thead><tr><th>#</th>' + ed.map(function (k) { return '<th>' + esc(k) + '</th>'; }).join('') + '</tr></thead><tbody>' +
           data.pages.map(function (pg, i) { return '<tr><td>' + (i + 1) + '</td>' + ed.map(function (k) { var v = pg.fields[k] == null ? '' : String(pg.fields[k]); return '<td>' + (/\n/.test(v) || v.length > 40 ? '<textarea data-ed="' + i + '|' + k + '" rows="2" style="min-width:220px;font-size:13px">' + esc(v) + '</textarea>' : '<input data-ed="' + i + '|' + k + '" value="' + esc(v) + '" style="min-height:32px;padding:3px 6px;font-size:13px;min-width:' + (k.length > 3 ? 140 : 90) + 'px">') + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div><p class="small muted">칸을 고치면 그대로 문서에 들어가요.</p>';
-      } else if (data.pages) hh += '<p class="small muted" style="margin:6px 0 0">' + data.pages.slice(0, 12).map(function (pg) { return esc(pg.fields.성명 || pg.fields.날짜 || pg.fields.구분 || ''); }).filter(Boolean).join(', ') + (data.pages.length > 12 ? ' …' : '') + '</p>';
+      } else if (data.lines) hh += '<style>' + TT.CSS + '</style><div style="margin-top:8px;max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#f6f3f4;padding:10px">' + TT.wallHTML(data.pages.map(function (pg) { return { bookmark: pg.fields.날짜, lines: pg.lines }; })) + '</div>';
+      else if (data.pages) hh += '<p class="small muted" style="margin:6px 0 0">' + data.pages.slice(0, 12).map(function (pg) { return esc(pg.fields.성명 || pg.fields.날짜 || pg.fields.구분 || ''); }).filter(Boolean).join(', ') + (data.pages.length > 12 ? ' …' : '') + '</p>';
       else if (data.sheets) hh += '<p class="small muted" style="margin:6px 0 0">' + data.sheets.slice(0, 14).map(function (s) { return esc(s.name) + (s.rows ? ' (' + s.rows.length + ')' : ''); }).join(' · ') + (data.sheets.length > 14 ? ' …' : '') + '</p>';
       $('#bprev', m.el).innerHTML = hh;
       $$('[data-ed]', m.el).forEach(function (x) {
@@ -196,7 +202,7 @@ var ADMX = (function () {
   /* ---------- 양식 관리 ---------- */
   function tplCard() {
     var box = $('#tplbody'); if (!box) return;
-    var keys = Object.keys(FM.FORMS).filter(function (k) { return FM.FORMS[k].file; });
+    var keys = Object.keys(FM.FORMS).filter(function (k) { return FM.FORMS[k].file && !FM.FORMS[k].lines; });
     if (App.DEMO) {
       box.innerHTML = '<p class="small">실제 운영에서는 [양식 설치]를 한 번 누르면 아래 기본 양식이 <b>구글 문서·구글 시트</b>로 바뀌어 드라이브 ‘콩쿠르 운영 시스템/양식’ 폴더에 들어가요. 그 문서를 열어 글꼴·문구·여백을 고치면 다음 출력부터 그대로 나옵니다. <b>{{성명}}</b>처럼 중괄호로 된 칸 이름만 지우지 마세요.</p>' +
         '<div class="grid g3">' + keys.map(function (k) { return '<div class="panel"><b>' + esc(FM.FORMS[k].name) + '</b><div class="row" style="margin-top:6px"><a class="btn sm" href="templates/' + esc(FM.FORMS[k].file) + '" download>기본 양식 받기</a>' + (/\.docx$/.test(FM.FORMS[k].file) ? '<button class="sm ghost" data-tf="' + k + '">칸 목록</button>' : '') + '</div></div>'; }).join('') + '</div>' +

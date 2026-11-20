@@ -18,12 +18,12 @@ var KC = (function () {
     Sessions: ['sessionId', 'round', 'groupKey', 'no', 'label', 'date', 'drawTime', 'startTime', 'endTime',
       'venue', 'perSec', 'locked', 'current'],
     Entries: ['entryId', 'round', 'pid', 'sessionId', 'seq', 'drawNo', 'attend', 'checkinAt', 'pass', 'note', 'award'],
-    Judges: ['judgeId', 'name', 'affiliation', 'pin', 'round', 'groups', 'seat', 'staffId', 'dates'],
+    Judges: ['judgeId', 'name', 'affiliation', 'pin', 'round', 'groups', 'seat', 'staffId', 'dates', 'phone', 'dayInfo', 'note'],
     Scores: ['scoreId', 'round', 'pid', 'sessionId', 'judgeId', 'value', 'comment', 'updatedAt'],
     Submissions: ['subId', 'sessionId', 'judgeId', 'submittedAt'],
     Logs: ['time', 'actor', 'action', 'detail'],
     // 시간표 설계: 날짜(경연일) 하루가 한 줄. blocks = 그날 들어갈 부문 목록(JSON)
-    Plan: ['dayId', 'round', 'date', 'start', 'amEnd', 'pmStart', 'lunchMin', 'gap', 'venue', 'piano', 'note', 'blocks'],
+    Plan: ['dayId', 'round', 'date', 'start', 'amEnd', 'pmStart', 'lunchMin', 'gap', 'breaks', 'venue', 'piano', 'note', 'blocks'],
     // 심사위원·진행요원 — 본인이 링크로 들어와 정보 입력. 주민번호·계좌번호는 브라우저에서 암호화된 값(E1.…)만 저장
     Staff: ['staffId', 'kind', 'name', 'affiliation', 'title', 'orgHead', 'phone', 'email', 'birth', 'zip', 'address',
       'bank', 'holder', 'accountMask', 'accountEnc', 'rrnMask', 'rrnEnc', 'idFile', 'bankFile', 'sign', 'idCheck',
@@ -65,6 +65,13 @@ var KC = (function () {
     amEnd: '12:00',         // 오전 조가 이 시각 전에 끝나도록 조 인원을 줄임
     pmStart: '13:00',       // 오후 첫 조 시작 (점심 최소 lunchMin 분 보장)
     lunchMin: '60',
+    minGap: '5',            // 조 사이가 이보다 짧으면 경고 (75회: 보통 10분, 본선 작은 조 5분)
+    breakMin: '15',         // 조 사이가 이 이상 비면 시간표에 '쉬는 시간'으로 표시
+    maxRunMin: '',          // 쉬지 않고(15분 이상 쉼 없이) 이어지는 최대 시간(분) — 넘으면 경고, 비우면 안 봄
+    midScoreMin: '20',      // 점심 앞뒤로 부문이 바뀌면(중간채점) 점심을 이만큼 더 길게 권함
+    // 부문·구분별 1인 시간 기본값 (75회 실제) — 부문별 기준에 값이 없을 때 씀. '부문 구분=분:초', 구분 없으면 부문 전체
+    perSecTable: '피아노=3:20, 바이올린=3:20, 첼로 초등부=3:30, 첼로=3:00, 비올라=3:00, 플루트=3:00, 클라리넷=3:00, 성악=3:00',
+    perSecTable2: '피아노 초등부=7:00, 피아노 중등부=8:00, 피아노 고등부=20:00, 바이올린 초등부=7:00, 바이올린 중등부=13:00, 바이올린 고등부=17:00, 첼로 초등부=7:00, 첼로 중등부=10:00, 첼로 고등부=20:00, 비올라 초등부=5:00, 비올라 중등부=7:00, 비올라 고등부=15:00, 플루트 초등부=5:00, 플루트 중등부=5:30, 플루트 고등부=7:30, 클라리넷 초등부=5:00, 클라리넷 중등부=8:00, 클라리넷 고등부=8:00, 성악 고등부=5:00, 성악 대학일반부=10:00',
     minGroupSize: '6',      // 오전 마감 전에 이보다 적게 들어가면 그냥 점심으로 넘김
     dayLatest: '18:00',     // 이보다 늦게 끝나면 경고
     calendarNote: '',       // 달력형 시간표 아래 메모 (예: 전국연합학력평가 일정)
@@ -80,7 +87,8 @@ var KC = (function () {
     noticeInterviewDue: '',  // 1위 인터뷰지 제출 마감 (예: 4월 16일 오후 6시)
     perSec2: '420',         // 본선 1인 기본 시간(초) — 부문별로 따로 정함 (75회: 초 7분·중 8분·고 20분)
     groupSize2: '7',        // 본선 조당 기본 인원
-    groupSize: '20',        // 조당 기본 인원
+    groupSize: '15',        // 조당 최대 인원 (75회는 20명까지 → 76회부터 15명을 넘지 않게)
+    balanceGroups: 'Y',     // 조당 인원을 '최대'로 보고 고르게 나눔 (100명·15명 → 15,15,14,14,14,14,14)
     splitByGender: '성악',   // 남/여를 나눠 편성하는 부문(쉼표로 여러 개)
     // 지방 참가자 배치: 오전·오후로 조가 나뉠 때 이 지역 참가자는 오후 조에, 단 그날 마지막 조는 피해서
     farRegions: '강원,충북,충남,대전,세종,전북,전남,광주,경북,경남,대구,울산,부산,제주',
@@ -98,6 +106,9 @@ var KC = (function () {
     publishR1Schedule: 'N', publishR1Result: 'N', publishR2Schedule: 'N', publishR2Result: 'N',
     notice: '',
     // ── 문서·공문 (공결공문·위촉확인서·입상확인서·계약서 등)
+    payMode: 'va',           // va: 가상계좌(신청자 파일의 결제 상태 그대로) / match: 통장 거래내역 입금대조
+    prevStats: '',           // 전년 신청 현황 (인원 합계만, 개인정보 없음) — 현황 탭에서 전년 파일로 만듦
+    applyEnd: '',            // 접수 마감일 — 현황 그래프에서 전년과 '마감 D-n' 기준으로 나란히 비교
     eventPeriod: '',         // 비우면 경연 일정에서 자동 (예: 2027년 3월 23일 ~ 4월 15일)
     hostLine: '경향신문사 · 이화여자고등학교',
     venueShort: '이화여고 백주년기념관 (서울 정동)',
@@ -113,7 +124,8 @@ var KC = (function () {
     gonggyeolNote: '신청하면 사무국 확인 후 이 화면에서 공문 PDF를 받을 수 있습니다. 수신처(학교·부대·기관)를 정확히 적어 주세요.',
     prizeDefault: '',        // 기본 상금 (예: 1위=1000000,2위=500000,3위=300000) — 부문별은 Groups.prizes
     prizeOpen: 'N', prizeDue: '', awardCeremony: '',  // 입상자 상금 수령 정보 입력 받기 / 마감 / 시상식 안내
-    judgeFee: '300000',      // 1일 심사비
+    judgeFee: '300000',      // 1일 심사비 (단가표가 비었을 때)
+    judgeRates: '예선 종일=300000, 예선 반나절=250000, 본선 종일=350000, 본선 반나절=300000, 주말 예선 종일=400000, 주말 예선 반나절=250000, 주말 본선 종일=400000, 주말 본선 반나절=350000',
     hourlyWage: '10700',     // 진행요원 시급 — 2027년 최저임금 10,700원 이상
     payDay: '근무한 달의 말일 (휴일이면 그 전날)', workPlace: '이화여고 백주년기념관 및 경향신문사',
     workDept: '경향신문사 문화사업국', workDuty: '이화경향음악콩쿠르 진행요원', defaultBreakMin: '60',
@@ -139,7 +151,7 @@ var KC = (function () {
   function normPhone(v) { var d = digits(v); return d.length < 7 ? '' : d; }
   function genderShort(g) { g = s(g); if (/남/.test(g)) return '남'; if (/여/.test(g)) return '여'; return ''; }
   function isPaid(p) { return /입금\s*확인|입금완료|결제\s*완료|^Y$|^완료$/.test(s(p.payStatus)); }
-  function isActive(p) { return !/취소|환불|삭제/.test(s(p.status)); }
+  function isActive(p) { return !/취소|환불|삭제/.test(s(p.status) + ' ' + s(p.payStatus)); }
   function cmpKo(a, b) { return String(a).localeCompare(String(b), 'ko'); }
   function toMin(t) { var m = /^(\d{1,2}):(\d{2})/.exec(s(t)); return m ? (+m[1]) * 60 + (+m[2]) : null; }
   function fromMin(n) { n = ((n % 1440) + 1440) % 1440; var h = Math.floor(n / 60), m = n % 60; return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m; }
@@ -199,24 +211,34 @@ var KC = (function () {
     var n = +v; return n > 20 ? n : n * 60; // 200 → 200초, 3 → 3분
   }
   function fmtSec(sec) { sec = Math.round(+sec || 0); var m = Math.floor(sec / 60), r = sec % 60; return m + '분' + (r ? r + '초' : ''); }
+  // 조 나누기 미리보기: 100명·최대 15명 → [15,15,14,14,14,14,14]
+  function splitSizes(n, size) { n = +n || 0; size = +size || 15; if (n <= 0) return []; var k = Math.ceil(n / size), base = Math.floor(n / k), extra = n % k, out = []; for (var i = 0; i < k; i++) out.push(base + (i < extra ? 1 : 0)); return out; }
   function parseBlocks(v) { if (Array.isArray(v)) return v; try { var a = JSON.parse(s(v) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
   function planDay(cfg, day) {
     var gap = s(day.gap) !== '' ? +day.gap : (+cfg.sessionGap || 10);
     var lunchMin = +day.lunchMin || +cfg.lunchMin || 60, lead = +cfg.drawLeadMin || 30, minSize = +cfg.minGroupSize || 6;
     var t = toMin(day.start || '09:30'), amEnd = toMin(day.amEnd || cfg.amEnd || '12:00'), pmStart = toMin(day.pmStart || cfg.pmStart || '13:00');
-    var items = [], warn = [], prevEnd = null, lunchDone = t >= amEnd;
+    var items = [], warn = [], prevEnd = null, lunchDone = t >= amEnd, breaks = parseBreaks(day.breaks), lastGap = gap;
     function lunch() {
       if (lunchDone) return;
+      if (items.length && items[items.length - 1].type === 'break') items.pop();   // 바로 점심이면 쉬는 시간은 점심에 합침
       var ls = prevEnd != null ? prevEnd : t, le = Math.max(ls + lunchMin, pmStart);
       if (prevEnd != null) items.push({ type: 'lunch', start: fromMin(ls), end: fromMin(le) });
       t = Math.max(t, le); lunchDone = true;
     }
+    // 긴 쉬는 시간: '15:00 20' → 15:00 이후 처음 끝나는 조 다음에 20분 (보통 쉬는 시간 대신)
+    function rest() {
+      var b = breaks.filter(function (x) { return !x.used && prevEnd >= x.at && (lunchDone || x.at < amEnd); })[0];
+      if (!b) return false;
+      b.used = true; items.push({ type: 'break', start: fromMin(prevEnd), end: fromMin(prevEnd + b.len) }); t = prevEnd + b.len; return true;
+    }
     parseBlocks(day.blocks).forEach(function (b) {
-      var per = parseSec(b.perSec) || +cfg.perSec || 200, size = +b.size || +cfg.groupSize || 20, rem = +b.count || 0;
+      var per = parseSec(b.perSec) || +cfg.perSec || 200, size = +b.size || +cfg.groupSize || 15, rem = +b.count || 0, balance = s(cfg.balanceGroups) !== 'N';
+      var bg = s(b.gap) !== '' ? +b.gap : gap;   // 부문마다 쉬는 시간 (본선 작은 조 5분 등)
       var sizes = s(b.sizes).split(/[^\d]+/).filter(Boolean).map(Number), si = 0, guard = 0;
       if (b.pmOnly && !lunchDone) lunch();
       while (rem > 0 && guard++ < 200) {
-        var want = Math.min(sizes.length ? (sizes[si] || size) : size, rem);
+        var want = Math.min(sizes.length ? (sizes[si] || size) : balance ? Math.ceil(rem / Math.ceil(rem / size)) : size, rem);
         if (!lunchDone) {
           var avail = amEnd - t, k = want;
           while (k > 0 && durMin(cfg, k, per) > avail) k--;
@@ -225,12 +247,82 @@ var KC = (function () {
         }
         var d = durMin(cfg, want, per);
         items.push({ type: 'session', groupKey: s(b.groupKey), n: want, start: fromMin(t), end: fromMin(t + d), dur: d, perSec: per, draw: fromMin(t - lead) });
-        prevEnd = t + d; t = prevEnd + gap; rem -= want; si++;
+        prevEnd = t + d; rem -= want; si++;
+        if (!rest()) t = prevEnd + bg;
       }
     });
+    while (items.length && items[items.length - 1].type !== 'session') items.pop();   // 마지막 조 뒤 쉬는 시간·점심은 빼기
+    // 점심 앞뒤로 부문이 바뀌면 '중간채점' (75회: 점심 80~110분)
+    items.forEach(function (x, i) {
+      if (x.type !== 'lunch') return;
+      var a = items.slice(0, i).filter(function (y) { return y.type === 'session'; }).pop(), b = items.slice(i + 1).filter(function (y) { return y.type === 'session'; })[0];
+      if (a && b && s(a.groupKey).split('|')[0] !== s(b.groupKey).split('|')[0]) {
+        x.note = '중간채점';
+        var need = lunchMin + (+cfg.midScoreMin || 0), len = toMin(x.end) - toMin(x.start);
+        if (+cfg.midScoreMin && len < need) warn.push('점심 앞뒤로 부문이 바뀌어요(중간채점) — 점심 ' + len + '분, ' + need + '분 이상 권함 (오후 시작을 늦추세요)');
+      }
+    });
+    breaks.forEach(function (b) { if (!b.used) warn.push(fromMin(b.at) + ' 쉬는 시간을 넣을 자리가 없어요'); });
     var end = prevEnd != null ? fromMin(prevEnd) : '';
-    if (end && toMin(end) > toMin(cfg.dayLatest || '18:00')) warn.push('끝나는 시각이 ' + end + '로 늦어요');
+    warn = warn.concat(checkTimes(cfg, items.filter(function (x) { return x.type === 'session'; }).map(function (x) { return { start: x.start, end: x.end, label: s(x.groupKey).split('|')[1] + ' ' + (x.no || '') }; }), { lunchMin: lunchMin, amEnd: amEnd, pmStart: pmStart, skipGap: true }));
     return { items: items, start: items.length ? items.filter(function (x) { return x.type === 'session'; })[0].start : '', end: end, warn: warn };
+  }
+  function parseBreaks(v) {
+    return s(v).split(/[,;\n]+/).map(function (x) {
+      var m = /(\d{1,2}):(\d{2})\s*(?:[-~]\s*(\d{1,2}):(\d{2})|\s+(\d+)\s*분?)?/.exec(s(x)); if (!m) return null;
+      var at = +m[1] * 60 + +m[2], len = m[3] ? (+m[3] * 60 + +m[4]) - at : +(m[5] || 20);
+      return len > 0 ? { at: at, len: len } : null;
+    }).filter(Boolean);
+  }
+  /* 시간 점검 — 계획과 실제 조(손으로 고친 시각 포함) 모두에 씀
+   *  list: 같은 날 [{start, end, label}] → 경고 문장 목록
+   *  겹침 · 쉬는 시간 부족(minGap) · 점심 없음/짧음 · 너무 늦게 끝남 · (설정 시) 쉬지 않고 너무 오래 */
+  function checkTimes(cfg, list, opt) {
+    opt = opt || {};
+    var w = [], L = list.filter(function (x) { return x.start && x.end; }).slice().sort(function (a, b) { return toMin(a.start) - toMin(b.start); });
+    if (!L.length) return w;
+    var minGap = s(cfg.minGap) !== '' ? +cfg.minGap : 5, lunchMin = opt.lunchMin || +cfg.lunchMin || 60, brk = +cfg.breakMin || 15, maxRun = +cfg.maxRunMin || 0;
+    var amEnd = opt.amEnd != null ? opt.amEnd : toMin(cfg.amEnd || '12:00'), pmStart = opt.pmStart != null ? opt.pmStart : toMin(cfg.pmStart || '13:00');
+    var bestLunch = 0, runStart = toMin(L[0].start);
+    for (var i = 1; i < L.length; i++) {
+      var a = L[i - 1], b = L[i], g = toMin(b.start) - toMin(a.end);
+      if (g < 0) w.push((-g) + '분 겹쳐요: ' + a.label + '(' + a.start + '~' + a.end + ') · ' + b.label + '(' + b.start + '~' + b.end + ')');
+      else if (!opt.skipGap && g < minGap) w.push('쉬는 시간이 ' + g + '분뿐이에요 (최소 ' + minGap + '분): ' + a.label + ' → ' + b.label);
+      // 점심 후보: 오전 마감~오후 시작 무렵(앞뒤 30분)에 걸친 빈 시간
+      if (toMin(a.end) <= pmStart + 30 && toMin(b.start) >= amEnd - 30) bestLunch = Math.max(bestLunch, g);
+      if (g >= brk) runStart = toMin(b.start);
+      else if (maxRun && toMin(b.end) - runStart > maxRun) { w.push(fromMin(runStart) + '~' + b.end + ' ' + (toMin(b.end) - runStart) + '분을 쉬지 않고 이어가요 (' + brk + '분 이상 쉬는 시간 권함): ' + b.label + '까지'); runStart = toMin(b.end); }
+    }
+    var first = toMin(L[0].start), last = Math.max.apply(null, L.map(function (x) { return toMin(x.end); }));
+    if (first < amEnd && last > pmStart) {
+      if (bestLunch < 30) w.push('점심시간이 없어요 (' + fromMin(amEnd) + '~' + fromMin(pmStart) + ' 사이에 ' + lunchMin + '분 이상 비워 주세요)');
+      else if (bestLunch < lunchMin) w.push('점심시간이 ' + bestLunch + '분이에요 (최소 ' + lunchMin + '분)');
+    }
+    L.forEach(function (x) { if (toMin(x.start) < amEnd && toMin(x.end) > pmStart) w.push('점심시간(' + fromMin(amEnd) + '~' + fromMin(pmStart) + ')에 걸친 조: ' + x.label + ' ' + x.start + '~' + x.end); });
+    if (last > toMin(cfg.dayLatest || '18:00')) w.push('끝나는 시각이 ' + fromMin(last) + '로 늦어요');
+    return w;
+  }
+  // 실제 조 전체 점검: 날짜·라운드별 경고 { 'R1|2027-03-24': [..] }
+  function checkSessions(cfg, sessions, plan) {
+    var by = {}, out = {};
+    (sessions || []).forEach(function (x) { if (x.date) (by[x.round + '|' + x.date] = by[x.round + '|' + x.date] || []).push(x); });
+    Object.keys(by).forEach(function (k) {
+      var pr = k.split('|'), p = (plan || []).filter(function (d) { return d.round === pr[0] && d.date === pr[1]; })[0] || {};
+      var w = checkTimes(cfg, by[k].map(function (x) { return { start: x.startTime, end: x.endTime, label: s(x.groupKey).split('|').join(' ') + ' ' + (x.label || x.no + '조') }; }),
+        { lunchMin: +p.lunchMin || 0, amEnd: p.amEnd ? toMin(p.amEnd) : null, pmStart: p.pmStart ? toMin(p.pmStart) : null });
+      if (w.length) out[k] = w;
+    });
+    return out;
+  }
+  // 부문·구분별 1인 시간 기본값: '첼로 초등부=3:30, 첼로=3:00' 처럼 구분까지 맞는 것 먼저
+  function perSecDefault(cfg, groupKey, round) {
+    var g = s(groupKey).split('|'), div = g[0], cat = normCategory((g[1] || '').replace(/\((남|여)\)/, '')), best = null;
+    s(round === 'R2' ? cfg.perSecTable2 : cfg.perSecTable).split(/[,;\n]+/).forEach(function (x) {
+      var m = /^\s*(\S+)(?:\s+(\S+))?\s*=\s*([\d:]+)\s*$/.exec(x); if (!m || m[1] !== div) return;
+      if (m[2] && normCategory(m[2]) !== cat) return;
+      if (!best || (m[2] && !best.cat)) best = { cat: m[2] || '', sec: parseSec(m[3]) };
+    });
+    return best ? best.sec : 0;
   }
   // 여러 날을 이어서: 조 번호는 같은 부문 안에서 날짜를 넘어 이어짐 (예: 피아노 초등부 8조는 다음 날 오전)
   function planAll(cfg, days) {
@@ -354,11 +446,57 @@ var KC = (function () {
     if (upd.length) db.upsert('Sessions', upd);
   }
 
+  /* ---------------- 심사비 단가 ----------------
+   * Config.judgeRates: '예선 종일=300000, 예선 반나절=250000, 본선 종일=350000, … 주말 본선 반나절=350000'
+   * Judges.dayInfo:   '2027-03-25 종일 09:00 300000; 2027-03-26 반나절 13:00'  (금액을 비우면 단가표로 계산) */
+  function parseJudgeRates(cfg) {
+    var out = {};
+    s(cfg.judgeRates).split(/[,，;\n]+/).forEach(function (part) {
+      var m = /^(.*?)[=:]\s*([\d,]+)\s*원?\s*$/.exec(s(part)); if (!m) return;
+      var k = m[1], v = +m[2].replace(/,/g, '');
+      var round = /본선|2차|결선/.test(k) || (s(cfg.r2Name) && k.indexOf(s(cfg.r2Name)) >= 0) ? 'R2' : 'R1';
+      var shift = /반나절|반일/.test(k) ? '반나절' : '종일';
+      var wk = /주말|휴일|토요일|일요일/.test(k) ? '주말' : '평일';
+      out[round + '|' + shift + '|' + wk] = v;
+    });
+    return out;
+  }
+  function isWeekend(date) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s(date)); if (!m) return false;
+    var d = new Date(+m[1], +m[2] - 1, +m[3]).getDay(); return d === 0 || d === 6;
+  }
+  function judgeDayFee(cfg, round, date, shift, explicit) {
+    var ex = s(explicit).replace(/,/g, '');
+    if (ex !== '' && !isNaN(+ex)) return +ex;
+    var R = parseJudgeRates(cfg), sh = shift === '반나절' ? '반나절' : '종일', wk = isWeekend(date) ? '주말' : '평일';
+    var v = R[round + '|' + sh + '|' + wk];
+    if (v == null) v = R[round + '|' + sh + '|평일'];
+    if (v == null) v = num(cfg.judgeFee);
+    return v || 0;
+  }
+  function parseDayInfo(v) {
+    var out = {};
+    s(v).split(/[;\n]+/).forEach(function (part) {
+      var m = /(\d{4}-\d{2}-\d{2})(?:\s+(종일|반나절))?(?:\s+(\d{1,2}:\d{2}))?(?:\s+([\d,]+))?/.exec(s(part)); if (!m) return;
+      out[m[1]] = { shift: m[2] || '', arrive: m[3] || '', fee: m[4] ? +m[4].replace(/,/g, '') : '' };
+    });
+    return out;
+  }
+  function dayInfoStr(map) {
+    return Object.keys(map).sort().map(function (d) {
+      var x = map[d] || {}; return [d, x.shift, x.arrive, x.fee].filter(function (y) { return s(y) !== ''; }).join(' ');
+    }).join('; ');
+  }
+
   /* ---------------- 채점 집계 ---------------- */
   function judgeCovers(j, groupKey) {
-    var div = s(groupKey).split('|')[0], g = s(j.groups);
+    var div = s(groupKey).split('|')[0], g = s(j.groups), gk = normCategory(groupKey);
     if (!g || g === '전체') return true;
-    return splitList(g.replace(/\|/g, '§')).some(function (x) { x = x.replace(/§/g, '|'); return x === groupKey || x === div; });
+    // '피아노' = 부문 전체, '피아노|초등부' = 세부 부문, '성악|고등부' = 성악 고등부(남)·(여) 모두
+    return splitList(g.replace(/\|/g, '§')).some(function (x) {
+      x = x.replace(/§/g, '|'); if (x === groupKey || x === div) return true;
+      var nx = normCategory(x); return nx === gk || gk.indexOf(nx + '(') === 0;
+    });
   }
   function judgesFor(db, round, groupKey) {
     return db.t('Judges').filter(function (j) { return j.round === round && judgeCovers(j, groupKey); }).sort(function (a, b) { return (+a.seat || 99) - (+b.seat || 99) || cmpKo(a.name, b.name); });
@@ -474,7 +612,20 @@ var KC = (function () {
     var keys = {};
     db.t('Groups').forEach(function (g) { keys[g.groupKey] = +g.sort || 999; });
     db.t('Participants').forEach(function (p) { if (!(p.groupKey in keys)) keys[p.groupKey] = 999; });
-    return Object.keys(keys).sort(function (a, b) { return keys[a] - keys[b] || cmpKo(a, b); });
+    return Object.keys(keys).sort(function (a, b) { return keys[a] - keys[b] || groupKeyCmp(a, b); });
+  }
+  // 순서를 따로 안 정했으면: 늘 쓰는 부문 순서(피아노·바이올린·…·성악) → 초·중·고·대학일반 → 남·여
+  var DIV_ORDER = ['피아노', '바이올린', '비올라', '첼로', '콘트라베이스', '더블베이스', '하프', '플루트', '오보에', '클라리넷', '바순', '색소폰', '호른', '트럼펫', '트롬본', '튜바', '타악기', '성악', '작곡'];
+  var CAT_ORDER = ['초등부', '중등부', '고등부', '대학일반부', '대학부', '일반부'];
+  function groupKeyCmp(a, b) {
+    var pa = s(a).split('|'), pb = s(b).split('|');
+    var da = DIV_ORDER.indexOf(pa[0]), db = DIV_ORDER.indexOf(pb[0]);
+    if (pa[0] !== pb[0]) return ((da < 0 ? 99 : da) - (db < 0 ? 99 : db)) || cmpKo(pa[0], pb[0]);
+    var ca = normCategory(pa[1]), cb = normCategory(pb[1]);
+    var ia = -1, ib = -1;
+    CAT_ORDER.forEach(function (x, i) { if (ia < 0 && ca.indexOf(x) === 0) ia = i; if (ib < 0 && cb.indexOf(x) === 0) ib = i; });
+    var ga = /\(남\)/.test(ca) ? 0 : /\(여\)/.test(ca) ? 1 : 2, gb = /\(남\)/.test(cb) ? 0 : /\(여\)/.test(cb) ? 1 : 2;
+    return ((ia < 0 ? 9 : ia) - (ib < 0 ? 9 : ib)) || (ga - gb) || cmpKo(ca, cb);
   }
 
   /* ---------------- 입금 대조 ---------------- */
@@ -732,7 +883,8 @@ var KC = (function () {
         appliedAt: s(r.appliedAt), payStatus: s(r.payStatus), teacher: s(r.teacher), pieces: normPieces(r.pieces) || s(old.pieces),
         status: /취소|환불/.test(s(r.status)) ? '취소' : (old.status || '정상'), note: s(r.note) || s(old.note)
       };
-      if (isPaid(old) && !isPaid(o)) { o.payStatus = old.payStatus; keptPaid++; }
+      // 통장 입금대조 방식일 때만: 사무국이 확인한 입금을 오래된 파일이 덮어쓰지 않게. 가상계좌는 파일의 결제 상태가 정답
+      if (cfg.payMode === 'match' && isPaid(old) && !isPaid(o)) { o.payStatus = old.payStatus; keptPaid++; }
       o.payMemo = s(old.payMemo);
       o.region = regionOf(o.address, o.zip);
       o.token = s(old.token) || randToken();
@@ -886,7 +1038,7 @@ var KC = (function () {
     var round = p.round === 'R2' ? 'R2' : 'R1';
     var rows = (p.days || []).map(function (d, i) {
       return { dayId: s(d.dayId) || (round + '-' + db.store.uid().slice(0, 8)), round: round, date: normDate(d.date), start: normTime(d.start), amEnd: normTime(d.amEnd), pmStart: normTime(d.pmStart),
-        lunchMin: s(d.lunchMin), gap: s(d.gap), venue: s(d.venue), piano: s(d.piano), note: s(d.note), blocks: JSON.stringify(parseBlocks(d.blocks)) };
+        lunchMin: s(d.lunchMin), gap: s(d.gap), breaks: s(d.breaks), venue: s(d.venue), piano: s(d.piano), note: s(d.note), blocks: JSON.stringify(parseBlocks(d.blocks)) };
     });
     db.replaceWhere('Plan', function (x) { return x.round === round; }, rows);
     db.log('admin', 'savePlan', round + ' ' + rows.length + '일');
@@ -942,11 +1094,75 @@ var KC = (function () {
     return true;
   });
 
+  /* 심사위원 명단(엑셀) 불러오기 — 화면(judgelist.js)이 읽어 준 줄을 사람·라운드·부문 단위로 묶어 저장
+   * rows: [{ name, round:'R1'|'R2', division, targets:['초등부',…] (비면 부문 전체), date, shift:'종일'|'반나절', arrive, fee, affiliation, phone, note, seq }]
+   * 같은 사람·라운드의 기존 줄은 PIN을 그대로 두고 갱신, 심사위원 인력(Staff)도 없으면 만들어 연결 */
+  def('importJudges', 'admin', true, function (db, p) {
+    var list = (p.rows || []).filter(function (r) { return s(r.name) && s(r.division) && /^R[12]$/.test(s(r.round)); });
+    if (!list.length) fail('불러올 심사위원이 없습니다.');
+    var by = {}, order = [];
+    list.forEach(function (r) {
+      var k = s(r.name) + '|' + r.round + '|' + s(r.division), J = by[k];
+      if (!J) { J = by[k] = { name: s(r.name), round: r.round, division: s(r.division), all: false, targets: [], days: {}, seq: '', first: '', affiliation: '', phone: '', note: [] }; order.push(k); }
+      var ts = (r.targets || []).map(s).filter(Boolean);
+      if (!ts.length) J.all = true;
+      ts.forEach(function (x) { x = normCategory(x); if (J.targets.indexOf(x) < 0) J.targets.push(x); });
+      var d = normDate(r.date);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        J.days[d] = { shift: s(r.shift), arrive: normTime(r.arrive), fee: s(r.fee).replace(/,/g, '') === '' ? '' : num(r.fee) };
+        if (!J.first || d < J.first) { J.first = d; J.seq = s(r.seq); }
+      }
+      if (!J.affiliation && s(r.affiliation)) J.affiliation = s(r.affiliation);
+      if (!J.phone && s(r.phone)) J.phone = s(r.phone);
+      if (s(r.note) && J.note.indexOf(s(r.note)) < 0) J.note.push(s(r.note));
+    });
+    var cur = db.t('Judges'), staff = db.t('Staff'), used = {}, touched = {}, staffNew = [], staffUpd = [], rows = [], ppl = {};
+    var out = { added: 0, updated: 0, removed: 0, kept: 0, staffAdded: 0, people: 0 };
+    cur.forEach(function (j) { if (j.pin) used[j.pin] = 1; });
+    function newPin() { for (var i = 0; i < 500; i++) { var x = String(100000 + Math.floor(Math.random() * 900000)); if (!used[x]) { used[x] = 1; return x; } } fail('PIN을 만들지 못했습니다.'); }
+    function findStaff(J) {
+      var ph = digits(J.phone).slice(-8);
+      var c = staff.concat(staffNew).filter(function (x) { return x.kind === 'judge' && x.name === J.name; });
+      return c.filter(function (x) { return ph && digits(x.phone).slice(-8) === ph; })[0]
+        || c.filter(function (x) { return !ph || !digits(x.phone) || (J.affiliation && x.affiliation === J.affiliation); })[0] || null;
+    }
+    order.forEach(function (k) {
+      var J = by[k], dates = Object.keys(J.days).sort();
+      var groups = J.all ? J.division : J.targets.map(function (x) { return J.division + '|' + x; }).join(', ');
+      var ex = cur.filter(function (j) { return !touched[j.judgeId] && j.name === J.name && j.round === J.round && (!s(j.groups) || s(j.groups) === '전체' || s(j.groups).split(/[|,\s]/)[0] === J.division); })[0];
+      var st = findStaff(J);
+      if (!st) { st = { staffId: 'S' + db.store.uid().slice(0, 10), kind: 'judge', name: J.name, affiliation: J.affiliation, phone: J.phone, token: db.store.uid() + db.store.uid(), status: '초대', updatedAt: db.store.now() }; staffNew.push(st); out.staffAdded++; }
+      else if ((!s(st.phone) && J.phone) || (!s(st.affiliation) && J.affiliation)) {
+        var u = { staffId: st.staffId }; if (!s(st.phone) && J.phone) u.phone = st.phone = J.phone; if (!s(st.affiliation) && J.affiliation) u.affiliation = st.affiliation = J.affiliation; staffUpd.push(u);
+      }
+      ppl[st.staffId] = 1;
+      var o = { judgeId: ex ? ex.judgeId : 'J' + db.store.uid().slice(0, 8), name: J.name, affiliation: J.affiliation || (ex && ex.affiliation) || '', round: J.round, groups: groups,
+        seat: J.seq || (ex && ex.seat) || '', staffId: st.staffId, dates: dates.join(','), dayInfo: dayInfoStr(J.days), phone: J.phone, note: J.note.join(' / '), pin: ex && ex.pin ? ex.pin : newPin() };
+      if (ex) { touched[ex.judgeId] = 1; out.updated++; } else out.added++;
+      rows.push(o);
+    });
+    if (p.removeMissing) {
+      var rounds = {}; rows.forEach(function (o) { rounds[o.round] = 1; });
+      var scored = {}; db.t('Scores').forEach(function (x) { scored[x.judgeId] = 1; });
+      var gone = cur.filter(function (j) { return rounds[j.round] && !touched[j.judgeId]; });
+      var del = gone.filter(function (j) { return !scored[j.judgeId]; }).map(function (j) { return j.judgeId; });
+      out.kept = gone.length - del.length; out.removed = del.length;
+      if (del.length) db.replaceWhere('Judges', function (j) { return del.indexOf(j.judgeId) >= 0; }, []);
+    }
+    if (staffNew.length || staffUpd.length) db.upsert('Staff', staffNew.concat(staffUpd));
+    db.upsert('Judges', rows);
+    if (s(p.rates)) db.upsert('Config', [{ key: 'judgeRates', value: s(p.rates) }]);
+    out.people = Object.keys(ppl).length;
+    db.log('admin', 'importJudges', out);
+    return out;
+  });
+
   def('saveJudges', 'admin', true, function (db, p) {
     var rows = (p.judges || []).map(function (j) {
       var o = { judgeId: s(j.judgeId) || ('J' + db.store.uid().slice(0, 8)), name: s(j.name), affiliation: s(j.affiliation), pin: s(j.pin), round: s(j.round) || 'R1', groups: s(j.groups), seat: s(j.seat) };
       if ('staffId' in j) o.staffId = s(j.staffId);
       if ('dates' in j) o.dates = splitList(j.dates).map(normDate).filter(Boolean).join(',');
+      ['phone', 'dayInfo', 'note'].forEach(function (k) { if (k in j) o[k] = s(j[k]); });
       return o;
     });
     var pins = {};
@@ -1297,15 +1513,19 @@ var KC = (function () {
     return Object.keys(seen).sort();
   }
   function judgeSummary(db) {
-    var staff = db.t('Staff'), people = {}, order = [];
+    var staff = db.t('Staff'), people = {}, order = [], cfg = db.cfg();
     db.t('Judges').forEach(function (j) {
       var st = j.staffId ? staff.filter(function (x) { return x.staffId === j.staffId; })[0] : staff.filter(function (x) { return x.kind === 'judge' && x.name === j.name && (!x.affiliation || !j.affiliation || x.affiliation === j.affiliation); })[0];
       var key = st ? st.staffId : 'N:' + j.name + '|' + j.affiliation;
-      if (!people[key]) { people[key] = { key: key, staffId: st ? st.staffId : '', name: j.name, affiliation: j.affiliation || (st && st.affiliation) || '', judgeIds: [], rounds: {} }; order.push(key); }
-      var P = people[key];
+      if (!people[key]) { people[key] = { key: key, staffId: st ? st.staffId : '', name: j.name, affiliation: j.affiliation || (st && st.affiliation) || '', phone: s(j.phone) || (st && st.phone) || '', judgeIds: [], rounds: {}, byDay: {} }; order.push(key); }
+      var P = people[key], info = parseDayInfo(j.dayInfo);
       P.judgeIds.push(j.judgeId);
       var R = P.rounds[j.round] = P.rounds[j.round] || { dates: [], divisions: [] };
-      judgeDatesOf(db, j).forEach(function (d) { if (R.dates.indexOf(d) < 0) R.dates.push(d); });
+      judgeDatesOf(db, j).forEach(function (d) {
+        if (R.dates.indexOf(d) < 0) R.dates.push(d);
+        var x = info[d] || {}, k = j.round + '|' + d;
+        if (!P.byDay[k]) P.byDay[k] = { date: d, round: j.round, shift: x.shift || '', arrive: x.arrive || '', fee: judgeDayFee(cfg, j.round, d, x.shift, x.fee) };
+      });
       var divs = s(j.groups) && s(j.groups) !== '전체' ? splitList(j.groups).map(function (g) { return g.split('|')[0]; })
         : db.t('Sessions').filter(function (x) { return x.round === j.round && (R.dates.indexOf(x.date) >= 0); }).map(function (x) { return x.groupKey.split('|')[0]; });
       divs.forEach(function (d) { if (d && R.divisions.indexOf(d) < 0) R.divisions.push(d); });
@@ -1315,8 +1535,42 @@ var KC = (function () {
       var P = people[k], days = {};
       Object.keys(P.rounds).forEach(function (r) { P.rounds[r].dates.forEach(function (d) { days[d] = 1; }); });
       P.days = Object.keys(days).sort();
+      // 하루하루의 심사비 (같은 날 예선·본선을 다 하면 두 줄)
+      P.dayInfo = Object.keys(P.byDay).map(function (x) { return P.byDay[x]; }).sort(function (a, b) { return cmpKo(a.date + a.round, b.date + b.round); });
+      delete P.byDay;
+      P.total = P.dayInfo.reduce(function (a, x) { return a + (+x.fee || 0); }, 0);
       return P;
     });
+  }
+
+  /* ---------------- 신청 현황 집계 (현황 탭 · 전년 비교) ----------------
+   * 개인정보 없이 숫자만. 전년 파일도 같은 함수로 묶어 Config.prevStats 에 JSON으로 저장 */
+  function gradeKey(category, grade) {
+    var c = normCategory(category), g = s(grade);
+    var pre = /^초/.test(c) ? '초' : /^중/.test(c) ? '중' : /^고/.test(c) ? '고' : /대학|일반/.test(c) ? '대학·일반' : c;
+    if (/졸업/.test(g)) return pre + ' 졸업';
+    var m = /(\d)/.exec(g);
+    return m ? pre + m[1] : pre;
+  }
+  function applicantStats(cfg, list) {
+    var o = { v: 1, total: 0, active: 0, paid: 0, wait: 0, cancel: 0, far: 0, male: 0, female: 0, groups: {}, divisions: {}, regions: {}, grades: {}, daily: {}, first: '', last: '', year: '' };
+    (list || []).forEach(function (p) {
+      o.total++;
+      var d = s(p.appliedAt).slice(0, 10).replace(/\./g, '-');
+      if (!isActive(p)) { o.cancel++; return; }
+      var gk = s(p.groupKey) || makeGroupKey(cfg, p.division, p.category, p.gender), div = gk.split('|')[0];
+      var G = o.groups[gk] = o.groups[gk] || { n: 0, paid: 0, wait: 0, m: 0, f: 0, far: 0 };
+      var paid = isPaid(p), far = isFar(cfg, p), g = genderShort(p.gender);
+      o.active++; G.n++; o.divisions[div] = (o.divisions[div] || 0) + 1;
+      if (paid) { o.paid++; G.paid++; } else { o.wait++; G.wait++; }
+      if (far) { o.far++; G.far++; }
+      if (g === '남') { o.male++; G.m++; } else if (g === '여') { o.female++; G.f++; }
+      var r = s(p.region) || regionOf(p.address, p.zip) || '미상'; o.regions[r] = (o.regions[r] || 0) + 1;
+      var gr = gradeKey(p.category, p.grade); o.grades[gr] = (o.grades[gr] || 0) + 1;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) { o.daily[d] = (o.daily[d] || 0) + 1; if (!o.first || d < o.first) o.first = d; if (!o.last || d > o.last) o.last = d; }
+    });
+    o.year = o.last ? o.last.slice(0, 4) : '';
+    return o;
   }
 
   function myRequests(db, pid) {
@@ -1353,7 +1607,7 @@ var KC = (function () {
     };
     if (st.kind === 'judge') {
       var me = judgeSummary(db).filter(function (x) { return x.staffId === st.staffId; })[0];
-      o.judge = me ? { rounds: me.rounds, days: me.days, fee: num(cfg.judgeFee) } : null;
+      o.judge = me ? { rounds: me.rounds, days: me.days, dayInfo: me.dayInfo, total: me.total, fee: me.dayInfo.every(function (x) { return x.fee === (me.dayInfo[0] || {}).fee; }) && me.dayInfo.length ? me.dayInfo[0].fee : 0 } : null;
     } else {
       var wage = num(st.wage || cfg.hourlyWage);
       o.work = db.t('Work').filter(function (w) { return w.staffId === st.staffId; }).sort(function (a, b) { return cmpKo(a.date, b.date); }).map(function (w) {
@@ -1617,6 +1871,9 @@ var KC = (function () {
     planDay: planDay, planAll: planAll, durMin: durMin, parseSec: parseSec, fmtSec: fmtSec, parseBlocks: parseBlocks,
     withholding: withholding, prizeTable: prizeTable, prizeAmount: prizeAmount, workMinutes: workMinutes, staffPay: staffPay, weekKey: weekKey,
     parseIdText: parseIdText, parseBankText: parseBankText, judgeCovers: judgeCovers,
+    parseJudgeRates: parseJudgeRates, judgeDayFee: judgeDayFee, parseDayInfo: parseDayInfo, dayInfoStr: dayInfoStr, isWeekend: isWeekend,
+    applicantStats: applicantStats, gradeKey: gradeKey, groupKeyCmp: groupKeyCmp, splitSizes: splitSizes,
+    checkTimes: checkTimes, checkSessions: checkSessions, parseBreaks: parseBreaks, perSecDefault: perSecDefault,
     authOf: function (store, tk) { return readToken(makeDb(store), tk); }
   };
 })();
