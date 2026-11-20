@@ -52,7 +52,10 @@ var KC = (function () {
     venue: '이화여자고등학교',
     themeColor: '#8a1c3c',
     fee: '200000',
-    adminPassword: '',
+    adminPassword: '',       // 책임 관리자 비밀번호 — 처음 로그인할 때 해시로 바뀌어 저장됨 (시트에서 안 보임)
+    ownerName: '',           // 책임 관리자 이름 (기록용, 비우면 담당자 이름)
+    admins: '',              // 다른 관리자들 [{id,name,h,on,last}] — 설정 › 관리자 계정에서 관리 (비밀번호는 해시)
+    loginLock: '',           // 로그인 실패 기록 (여러 번 틀리면 잠깐 막음)
     deskPin: '',
     // 라운드 설정 — mode: ox(O/X 개수) | rank(등위, 낮을수록 상위) | score(점수, 높을수록 상위)
     r1Name: '예선', r1Mode: 'ox', r1Judges: '5', r1Max: '1', r1Drop: '0',
@@ -386,10 +389,12 @@ var KC = (function () {
     var db = {
       store: store,
       t: function (name) { if (!cache[name]) cache[name] = store.all(name); return cache[name]; },
-      upsert: function (name, rows) { store.upsert(name, KEYS[name], rows); delete cache[name]; },
+      upsert: function (name, rows) { store.upsert(name, KEYS[name], rows); delete cache[name]; if (name === 'Config') delete cache.__cfg; },
       replaceWhere: function (name, pred, rows) { store.replaceWhere(name, pred, rows || []); delete cache[name]; },
       append: function (name, rows) { store.append(name, rows); delete cache[name]; },
+      who: '',
       log: function (actor, action, detail) {
+        if (actor === 'admin' && db.who) actor = 'admin:' + db.who;   // 관리자마다 이름이 남음
         store.append('Logs', [{ time: store.now(), actor: actor, action: action, detail: typeof detail === 'string' ? detail : JSON.stringify(detail) }]);
       }
     };
@@ -663,6 +668,68 @@ var KC = (function () {
   }
 
   /* ---------------- 인증 ---------------- */
+  /* ---------------- 비밀번호 · 로그인 잠금 ----------------
+   * 비밀번호는 'H1$소금$해시'(SHA-256 1000번)로만 저장. 예전 평문 값은 처음 로그인할 때 바뀜.
+   * 여러 번 틀리면 잠깐 막음 (구글 앱스크립트는 접속 IP를 알 수 없어 역할별로 막음) */
+  function utf8bytes(str) {
+    var out = [];
+    for (var i = 0; i < str.length; i++) {
+      var c = str.charCodeAt(i);
+      if (c < 0x80) out.push(c);
+      else if (c < 0x800) out.push(0xc0 | c >> 6, 0x80 | c & 63);
+      else if (c >= 0xd800 && c < 0xdc00 && i + 1 < str.length) { var cp = 0x10000 + ((c - 0xd800) << 10) + (str.charCodeAt(++i) - 0xdc00); out.push(0xf0 | cp >> 18, 0x80 | cp >> 12 & 63, 0x80 | cp >> 6 & 63, 0x80 | cp & 63); }
+      else out.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+    }
+    return out;
+  }
+  var SHA_K = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+  function sha256hex(str) {
+    var b = utf8bytes(str), l = b.length * 8, H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19], W = new Array(64), i, t;
+    b.push(0x80); while (b.length % 64 !== 56) b.push(0);
+    b.push(0, 0, 0, 0, (l >>> 24) & 255, (l >>> 16) & 255, (l >>> 8) & 255, l & 255);
+    var r = function (x, n) { return (x >>> n) | (x << (32 - n)); };
+    for (var o = 0; o < b.length; o += 64) {
+      for (t = 0; t < 16; t++) W[t] = (b[o + 4 * t] << 24) | (b[o + 4 * t + 1] << 16) | (b[o + 4 * t + 2] << 8) | b[o + 4 * t + 3];
+      for (t = 16; t < 64; t++) { var x = W[t - 15], y = W[t - 2]; W[t] = (W[t - 16] + (r(x, 7) ^ r(x, 18) ^ (x >>> 3)) + W[t - 7] + (r(y, 17) ^ r(y, 19) ^ (y >>> 10))) | 0; }
+      var a = H[0], bb = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+      for (t = 0; t < 64; t++) {
+        var t1 = (h + (r(e, 6) ^ r(e, 11) ^ r(e, 25)) + ((e & f) ^ (~e & g)) + SHA_K[t] + W[t]) | 0, t2 = ((r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & bb) ^ (a & c) ^ (bb & c))) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = bb; bb = a; a = (t1 + t2) | 0;
+      }
+      H[0] = (H[0] + a) | 0; H[1] = (H[1] + bb) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0; H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+    }
+    for (i = 0, t = ''; i < 8; i++) t += ('00000000' + (H[i] >>> 0).toString(16)).slice(-8);
+    return t;
+  }
+  function pwDigest(salt, pw) { var h = sha256hex(salt + ':' + pw); for (var i = 0; i < 1000; i++) h = sha256hex(h + salt); return h; }
+  function pwHash(db, pw) { var salt = s(db.store.uid()).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16) || String(Math.random()).slice(2); return 'H1$' + salt + '$' + pwDigest(salt, pw); }
+  function pwCheck(stored, pw) {
+    stored = s(stored); if (!stored || !s(pw)) return false;
+    var m = /^H1\$([^$]+)\$([0-9a-f]{64})$/.exec(stored);
+    return m ? pwDigest(m[1], pw) === m[2] : stored === pw;
+  }
+  function adminList(c) { try { var a = JSON.parse(s(c.admins) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+  function saveAdminList(db, list) { db.upsert('Config', [{ key: 'admins', value: JSON.stringify(list) }]); }
+  var LOCK = { admin: [8, 10], desk: [20, 10], judge: [30, 10] };   // [이 안에 이만큼 틀리면, 분 동안 막음]
+  function lockState(db) { try { return JSON.parse(s(db.cfg().loginLock) || '{}') || {}; } catch (e) { return {}; } }
+  function checkLock(db, role) {
+    var st = lockState(db)[role], now = Date.now();
+    if (st && st.until > now) fail('비밀번호를 여러 번 틀려서 로그인을 잠시 막았어요. ' + Math.ceil((st.until - now) / 60000) + '분 뒤에 다시 해 주세요. (이미 들어와 있는 화면은 그대로 쓸 수 있어요)');
+  }
+  function noteFail(db, role) {
+    var all = lockState(db), st = all[role] || {}, now = Date.now(), lim = LOCK[role] || [10, 10];
+    st.f = (st.f || []).filter(function (x) { return now - x < lim[1] * 60000; }); st.f.push(now);
+    if (st.f.length >= lim[0]) { st.until = now + lim[1] * 60000; st.f = []; }
+    all[role] = st; db.upsert('Config', [{ key: 'loginLock', value: JSON.stringify(all) }]);
+    db.log('public', 'loginFail', role + (st.until > now ? ' — ' + lim[1] + '분 잠금' : ''));
+  }
+  function clearFail(db, role) { var all = lockState(db); if (all[role]) { delete all[role]; db.upsert('Config', [{ key: 'loginLock', value: JSON.stringify(all) }]); } }
+  function ownerName(c) { return s(c.ownerName) || s(c.manager) || '책임 관리자'; }
+  var SECRET_KEYS = ['adminPassword', 'admins', 'loginLock'];
+
   function issueToken(db, payload) {
     var tk = db.store.uid();
     db.store.cachePut('tk_' + tk, JSON.stringify(payload), 6 * 3600);
@@ -824,35 +891,97 @@ var KC = (function () {
     return participantView(db, db.pmap()[q.id]);
   });
 
-  def('login', 'public', false, function (db, p) {
+  def('login', 'public', true, function (db, p) {
     var c = db.cfg(), role = s(p.role), secret = s(p.secret);
     if (!secret) fail('비밀번호를 입력해 주세요.');
     if (role === 'admin') {
+      checkLock(db, 'admin');
       if (!c.adminPassword) fail('관리자 비밀번호가 아직 설정되지 않았습니다. 구글시트 Config에서 adminPassword를 먼저 넣어 주세요.');
-      if (secret !== c.adminPassword) fail('비밀번호가 맞지 않습니다.');
-      return { token: issueToken(db, { role: 'admin' }), role: 'admin' };
+      if (pwCheck(c.adminPassword, secret)) {
+        if (!/^H1\$/.test(s(c.adminPassword))) db.upsert('Config', [{ key: 'adminPassword', value: pwHash(db, secret) }]);   // 평문 → 해시
+        clearFail(db, 'admin'); db.who = ownerName(c); db.log('admin', 'login', '책임 관리자');
+        return { token: issueToken(db, { role: 'admin', owner: true, name: ownerName(c) }), role: 'admin', name: ownerName(c), owner: true };
+      }
+      var list = adminList(c), me = list.filter(function (a) { return a.on !== 'N' && pwCheck(a.h, secret); })[0];
+      if (me) {
+        me.last = db.store.now(); saveAdminList(db, list); clearFail(db, 'admin'); db.who = me.name; db.log('admin', 'login', '');
+        return { token: issueToken(db, { role: 'admin', owner: false, name: me.name, adminId: me.id }), role: 'admin', name: me.name, owner: false };
+      }
+      if (list.some(function (a) { return a.on === 'N' && pwCheck(a.h, secret); })) fail('사용이 중지된 계정이에요. 책임 관리자에게 문의해 주세요.');
+      noteFail(db, 'admin'); fail('비밀번호가 맞지 않습니다.');
     }
     if (role === 'desk') {
-      if (secret !== c.deskPin && secret !== c.adminPassword) fail('PIN이 맞지 않습니다.');
+      checkLock(db, 'desk');
+      var ok = (s(c.deskPin) && secret === s(c.deskPin)) || pwCheck(c.adminPassword, secret) || adminList(c).some(function (a) { return a.on !== 'N' && pwCheck(a.h, secret); });
+      if (!ok) { noteFail(db, 'desk'); fail('PIN이 맞지 않습니다.'); }
+      clearFail(db, 'desk');
       return { token: issueToken(db, { role: 'desk' }), role: 'desk' };
     }
     if (role === 'judge') {
+      checkLock(db, 'judge');
       var j = db.t('Judges').filter(function (x) { return s(x.pin) && s(x.pin) === secret; })[0];
-      if (!j) fail('PIN이 맞지 않습니다.');
+      if (!j) { noteFail(db, 'judge'); fail('PIN이 맞지 않습니다.'); }
+      clearFail(db, 'judge');
       return { token: issueToken(db, { role: 'judge', judgeId: j.judgeId }), role: 'judge', name: j.name };
     }
     fail('알 수 없는 로그인 유형');
   });
 
+  // ── 관리자 계정 (책임 관리자만 관리) ──
+  function ownerOnly(auth) { if (!auth || !auth.owner) fail('책임 관리자만 할 수 있어요.'); }
+  def('adminAccounts', 'admin', false, function (db, p, auth) {
+    ownerOnly(auth);
+    var c = db.cfg(), lk = lockState(db), now = Date.now();
+    return { owner: ownerName(c), hashed: /^H1\$/.test(s(c.adminPassword)), list: adminList(c).map(function (a) { return { id: a.id, name: a.name, on: a.on !== 'N', last: a.last || '' }; }),
+      locks: Object.keys(lk).filter(function (k) { return lk[k].until > now; }).map(function (k) { return { role: k, min: Math.ceil((lk[k].until - now) / 60000) }; }) };
+  });
+  def('saveAdminAccount', 'admin', true, function (db, p, auth) {
+    ownerOnly(auth);
+    var c = db.cfg(), list = adminList(c), name = s(p.name), pw = s(p.password), id = s(p.id);
+    var cur = id ? list.filter(function (a) { return a.id === id; })[0] : null;
+    if (id && !cur) fail('관리자를 찾지 못했어요.');
+    if (p.remove) { list = list.filter(function (a) { return a.id !== id; }); saveAdminList(db, list); db.log('admin', 'adminRemove', cur.name); return true; }
+    if (!cur) { if (!name) fail('이름을 넣어 주세요.'); if (list.length >= 10) fail('관리자는 10명까지예요.'); cur = { id: 'A' + db.store.uid().slice(0, 8), name: name, h: '', on: 'Y', last: '' }; list.push(cur); }
+    if (name) cur.name = name;
+    if ('on' in p) cur.on = p.on ? 'Y' : 'N';
+    if (pw) {
+      if (pw.length < 8) fail('비밀번호는 8자 이상으로 해 주세요.');
+      if (pwCheck(c.adminPassword, pw) || list.some(function (a) { return a !== cur && pwCheck(a.h, pw); }) || pw === s(c.deskPin)) fail('다른 관리자·진행요원 PIN과 같은 비밀번호는 쓸 수 없어요.');
+      cur.h = pwHash(db, pw);
+    }
+    if (!cur.h) fail('비밀번호를 넣어 주세요.');
+    saveAdminList(db, list); db.log('admin', 'adminSave', cur.name + (pw ? ' (비밀번호)' : '') + (cur.on === 'N' ? ' (중지)' : ''));
+    return cur.id;
+  });
+  def('changePassword', 'admin', true, function (db, p, auth) {
+    var c = db.cfg(), old = s(p.old), pw = s(p.password);
+    if (pw.length < 8) fail('새 비밀번호는 8자 이상으로 해 주세요.');
+    if (auth.owner) {
+      if (!pwCheck(c.adminPassword, old)) fail('지금 비밀번호가 맞지 않아요.');
+      if (adminList(c).some(function (a) { return pwCheck(a.h, pw); })) fail('다른 관리자와 같은 비밀번호는 쓸 수 없어요.');
+      db.upsert('Config', [{ key: 'adminPassword', value: pwHash(db, pw) }]);
+    } else {
+      var list = adminList(c), me = list.filter(function (a) { return a.id === auth.adminId; })[0];
+      if (!me || !pwCheck(me.h, old)) fail('지금 비밀번호가 맞지 않아요.');
+      if (pwCheck(c.adminPassword, pw) || list.some(function (a) { return a !== me && pwCheck(a.h, pw); })) fail('다른 관리자와 같은 비밀번호는 쓸 수 없어요.');
+      me.h = pwHash(db, pw); saveAdminList(db, list);
+    }
+    db.log('admin', 'changePassword', '');
+    return true;
+  });
+  def('unlockLogins', 'admin', true, function (db, p, auth) { ownerOnly(auth); db.upsert('Config', [{ key: 'loginLock', value: '' }]); db.log('admin', 'unlockLogins', ''); return true; });
+
   // ── 관리자 ──
-  def('adminLoad', 'admin', false, function (db) {
+  def('adminLoad', 'admin', false, function (db, p, auth) {
     var keys = allGroupKeys(db);
     var results = { R1: {}, R2: {} };
     ['R1', 'R2'].forEach(function (r) {
       keys.forEach(function (k) { if (entriesOf(db, r, k).length) results[r][k] = computeGroup(db, r, k); });
     });
+    var cfg = Object.assign({}, db.cfg()); SECRET_KEYS.forEach(function (k) { delete cfg[k]; });
     return {
-      cfg: db.cfg(), groupKeys: keys, groups: db.t('Groups'), participants: db.t('Participants'),
+      me: { name: auth && auth.name || '', owner: !!(auth && auth.owner) },
+      cfg: cfg, groupKeys: keys, groups: db.t('Groups'), participants: db.t('Participants'),
       sessions: db.t('Sessions'), entries: db.t('Entries'), judges: db.t('Judges'),
       submissions: db.t('Submissions'), results: results, plan: db.t('Plan'),
       staff: db.t('Staff'), work: db.t('Work'), prizes: db.t('Prizes'), requests: db.t('Requests'), docs: db.t('Docs'), judgePeople: judgeSummary(db)
@@ -861,7 +990,7 @@ var KC = (function () {
 
   def('setConfig', 'admin', true, function (db, p) {
     var rows = [];
-    Object.keys(p.values || {}).forEach(function (k) { rows.push({ key: k, value: s(p.values[k]) }); });
+    Object.keys(p.values || {}).forEach(function (k) { if (SECRET_KEYS.indexOf(k) < 0) rows.push({ key: k, value: s(p.values[k]) }); });   // 비밀번호는 전용 메뉴로만
     db.upsert('Config', rows);
     db.log('admin', 'setConfig', Object.keys(p.values || {}).join(','));
     return true;
@@ -1852,6 +1981,8 @@ var KC = (function () {
       if (a.role !== 'public') {
         auth = readToken(db, req.token);
         if (!auth || ROLE_OK[a.role].indexOf(auth.role) < 0) return { ok: false, error: '로그인이 필요합니다.', needLogin: true };
+        if (auth.role === 'admin' && auth.adminId && !adminList(db.cfg()).some(function (x) { return x.id === auth.adminId && x.on !== 'N'; })) return { ok: false, error: '사용이 중지된 관리자예요. 책임 관리자에게 문의해 주세요.', needLogin: true };
+        db.who = auth.name || '';
       }
       var run = function () { db.invalidate(); return a.run(db, req.params || {}, auth); };
       var data = a.write ? store.withLock(run) : run();
@@ -1874,7 +2005,8 @@ var KC = (function () {
     parseJudgeRates: parseJudgeRates, judgeDayFee: judgeDayFee, parseDayInfo: parseDayInfo, dayInfoStr: dayInfoStr, isWeekend: isWeekend,
     applicantStats: applicantStats, gradeKey: gradeKey, groupKeyCmp: groupKeyCmp, splitSizes: splitSizes,
     checkTimes: checkTimes, checkSessions: checkSessions, parseBreaks: parseBreaks, perSecDefault: perSecDefault,
-    authOf: function (store, tk) { return readToken(makeDb(store), tk); }
+    sha256hex: sha256hex, pwCheck: pwCheck,
+    authOf: function (store, tk) { var db = makeDb(store), x = readToken(db, tk); if (x && x.role === 'admin' && x.adminId && !adminList(db.cfg()).some(function (y) { return y.id === x.adminId && y.on !== 'N'; })) return null; return x; }
   };
 })();
 if (typeof module !== 'undefined') module.exports = KC;
