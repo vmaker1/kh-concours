@@ -35,6 +35,7 @@
   .pv th, .pv td { text-align: right; font-variant-numeric: tabular-nums; }
   .pv th.h, .pv td:first-child { text-align: left; }
   .pv thead tr:not(.yr) th { text-align: right; }
+  .pv thead tr th.h { text-align: left; }
   .pv thead tr.yr th { text-align: center; font-size: 14px; color: var(--ink); background: var(--accent-soft); }
   .pv thead tr.yr th.pr { background: var(--panel); color: var(--sub); }
   .pv thead tr.yr th small { font-weight: 500; color: var(--sub); margin-left: 4px; }
@@ -45,6 +46,8 @@
   .pv tr.hl td { font-weight: 800; border-top: 2px solid var(--line); }
   .pv .up { color: var(--ok); } .pv .dn { color: var(--bad); }
   .pv .z { color: var(--line); }
+  .linkish { background: none; border: 0; padding: 0; min-height: 0; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; font: inherit; }
+  .pv th small .up, .pv td small .up { color: var(--ok); } .pv td small .dn { color: var(--bad); }
   .bars { display: grid; gap: 7px; }
   .hb { display: grid; grid-template-columns: 92px 1fr 46px 40px; gap: 8px; align-items: center; font-size: 14px; }
   .hb .lab { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1228,7 +1231,7 @@ function accountCard() {
 }
 /* ================= 지난 회차 ================= */
 // 회차별 신청자 파일 → 통계(현황 탭 비교용) + 이름 검색 명단(접수 마지막 날로부터 3년만, 서버가 자동으로 지움)
-let ASRCH = { q: '', no: '', division: '' }, ARES = null;
+let ASRCH = { q: '', no: '', division: '' }, ARES = null, ACAT = '';
 const addY3 = d => { const m = /^(\d{4})-(\d{2}-\d{2})/.exec(d || ''); return m ? (+m[1] + 3) + '-' + (m[2] === '02-29' ? '02-28' : m[2]) : ''; };
 function arch() {
   const SE = (D.seasons || []).slice().sort((a, b) => +b.no - +a.no), ln = liveNo();
@@ -1249,12 +1252,15 @@ function arch() {
       '<hr><b>회차 넣기</b><div class="row" style="gap:8px;margin-top:8px;align-items:center"><input id="zno" placeholder="회차 (예: 75)" inputmode="numeric" style="width:130px"><label class="btn pri" style="cursor:pointer">신청자 엑셀 고르기<input type="file" id="zf" accept=".xlsx,.xls,.csv" hidden></label>' +
       (D.participants.length ? '<span class="sp"></span><button id="zcur">올해 자료를 ' + (ln ? ln + '회로 ' : '') + '보관</button>' : '') + '</div>' +
       (D.participants.length ? '<p class="small muted" style="margin-top:6px">\'올해 자료 보관\'은 대회가 끝난 뒤 눌러 두면 예선 통과·본선 입상까지 함께 남아요. 다시 누르면 그 회차를 새로 덮어써요.</p>' : '') + '</div>' +
+    seasonsOverview(SE, stOf, ln) +
     '<div class="card" style="margin-top:16px"><h2>찾기</h2><div class="row" style="gap:8px">' +
       '<input id="aq" placeholder="이름 · 학교 · 생년월일" value="' + esc(ASRCH.q) + '" style="width:220px">' +
       '<select id="ano" style="width:auto"><option value="">모든 회차</option>' + SE.filter(z => +z.people > 0).map(z => '<option value="' + esc(z.no) + '"' + (ASRCH.no === z.no ? ' selected' : '') + '>' + esc(z.label || z.no + '회') + '</option>').join('') + '</select>' +
       '<select id="adv" style="width:auto"><option value="">모든 부문</option>' + divs.map(d => '<option' + (ASRCH.division === d ? ' selected' : '') + '>' + esc(d) + '</option>').join('') + '</select>' +
       '<button class="pri" id="ago">찾기</button></div><div id="ares" style="margin-top:12px"></div></div>';
   renderARes();
+  const ac = $('#acat'); if (ac) ac.addEventListener('change', e => { ACAT = e.target.value; arch(); });
+  $$('[data-ov]').forEach(b => b.addEventListener('click', () => { DBASE = b.dataset.ov; DCMP = null; TAB = 'dash'; location.hash = TAB; shell(); window.scrollTo(0, 0); }));
   $('#zf').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) seasonFile(f); });
   const zc = $('#zcur'); if (zc) zc.addEventListener('click', () => {
     const m = modal('<h2>올해 자료 보관</h2><p>지금 이 시스템의 참가자 ' + nf(D.participants.length) + '명을 회차로 보관해요. 예선 통과·본선 입상도 함께 남아요.</p><label class="f" for="cno">회차</label><input id="cno" value="' + (ln || '') + '" inputmode="numeric"><label class="f" for="clb">이름</label><input id="clb" placeholder="비우면 \'76회 (2027)\'처럼"><div class="row end" style="margin-top:12px"><button data-close>취소</button><button class="pri" id="cgo">보관</button></div>');
@@ -1271,6 +1277,32 @@ function arch() {
   };
   $('#ago').addEventListener('click', go);
   $('#aq').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+}
+// 회차별 한눈에: 부문(줄) × 회차(칸), 구분을 고르면 그 구분만. 칸 머리를 누르면 그 회차 기준으로 현황
+function seasonsOverview(SE, stOf, ln) {
+  const cols = SE.slice().sort((a, b) => +a.no - +b.no).map(z => ({ id: 's' + z.no, short: z.no + '회', year: stOf(z).year || z.year || '', st: stOf(z) }));
+  if (D.participants.length && !SE.some(z => +z.no === ln)) { const st = KC.applicantStats(D.cfg, D.participants); cols.push({ id: 'live', short: ln ? ln + '회' : '올해', year: String(D.cfg.applyEnd || '').slice(0, 4) || st.year, st, live: true }); }
+  if (!cols.length) return '';
+  const base = c => String(c || '').replace(/\((남|여)\)$/, '');
+  const catName = c => c === '대학일반부' ? '대학·일반부' : c;
+  const divs = [], cats = [];
+  cols.forEach(c => Object.keys(c.st.groups || {}).forEach(k => { const [d, ct] = k.split('|'); if (!divs.includes(d)) divs.push(d); if (ct && !cats.includes(base(ct))) cats.push(base(ct)); }));
+  divs.sort((a, b) => KC.groupKeyCmp(a + '|', b + '|')); cats.sort((a, b) => KC.groupKeyCmp('x|' + a, 'x|' + b));
+  if (ACAT && !cats.includes(ACAT)) ACAT = '';
+  const val = (st, dv) => { let v = 0, has = false; Object.keys(st.groups || {}).forEach(k => { const [d, ct] = k.split('|'); if (d === dv && (!ACAT || base(ct) === ACAT)) { has = true; v += st.groups[k].n || 0; } }); return has ? v : null; };
+  const tot = cols.map(c => divs.reduce((a, d) => a + (val(c.st, d) || 0), 0));
+  const dl = (a, b) => { const d = a - b; return d > 0 ? '<span class="up">▲' + nf(d) + '</span>' : d < 0 ? '<span class="dn">▼' + nf(-d) + '</span>' : '<span class="muted">–</span>'; };
+  return '<div class="card" style="margin-top:16px"><div class="row" style="align-items:center"><h2 style="margin:0">회차별 한눈에</h2><span class="sp"></span>' +
+    '<select id="acat" style="width:auto"><option value="">모든 구분</option>' + cats.map(c => '<option value="' + esc(c) + '"' + (ACAT === c ? ' selected' : '') + '>' + esc(catName(c)) + '</option>').join('') + '</select></div>' +
+    '<p class="small muted" style="margin:6px 0 0">신청(취소·환불 제외) 인원' + (ACAT ? ' — ' + esc(catName(ACAT)) + '만' : '') + '. 회차 이름을 누르면 그 회차 기준으로 현황 탭이 열려요.' + (cols.some(c => c.live) ? ' 올해 칸은 지금까지 들어온 인원이라 접수 중에는 앞 회차보다 적게 보여요.' : '') + '</p>' +
+    '<div class="scroll" style="margin-top:10px"><table class="gtab pv"><thead><tr><th class="h">부문</th>' +
+      cols.map((c, i) => '<th class="' + (i ? '' : 'b') + (c.live ? ' t' : '') + '"><button class="linkish" data-ov="' + c.id + '" style="font-weight:800">' + esc(c.short) + '</button><br><small class="muted" style="font-weight:500">' + esc(c.year) + (c.live ? ' · 올해' : '') + '</small></th>').join('') +
+      (cols.length > 1 ? '<th class="b">앞 회차 대비</th>' : '') + '</tr></thead><tbody>' +
+    divs.map(d => { const v = cols.map(c => val(c.st, d)), L = v.length;
+      return '<tr><td><b>' + esc(d) + '</b></td>' + v.map((x, i) => '<td class="' + (i ? '' : 'b') + (cols[i].live ? ' t' : '') + '">' + (x == null ? '' : nf(x)) + '</td>').join('') +
+        (L > 1 ? '<td class="b">' + (v[L - 1] != null && v[L - 2] != null ? dl(v[L - 1], v[L - 2]) : '') + '</td>' : '') + '</tr>'; }).join('') +
+    '<tr class="hl"><td>합계</td>' + tot.map((x, i) => '<td class="' + (i ? '' : 'b') + (cols[i].live ? ' t' : '') + '">' + nf(x) + (i ? '<br><small style="font-weight:500">' + dl(x, tot[i - 1]) + '</small>' : '') + '</td>').join('') +
+      (cols.length > 1 ? '<td class="b">' + dl(tot[tot.length - 1], tot[tot.length - 2]) + '</td>' : '') + '</tr></tbody></table></div></div>';
 }
 function renderARes() {
   const el = $('#ares'); if (!el) return;
