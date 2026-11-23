@@ -659,7 +659,23 @@ function sessionList(sid) {
 
 /* ================= 시간표 설계 =================
  * 부문별 1인 시간·조당 인원 → 날짜마다 부문을 넣으면 조·점심이 자동 배치(75회 방식) → 계획대로 조편성 → 시간표 출력 */
-let PLANS = {}, PLAN_DIRTY = {}, TT_SRC = 'auto';
+let PLANS = {}, TT_SRC = 'auto';
+// PED = 지금 고치고 있는 하루 { r: 회차(R1/R2), i: 저장된 목록에서의 자리(-1 = 새 날짜·복사본), d: 그날 계획, dirty }
+let PED = null;
+const cloneDay = d => JSON.parse(JSON.stringify(d));
+// 저장된 날짜들 + (고치는 중이면) 그 하루를 바꿔 끼운 목록 — 남은 인원 계산·미리보기용
+function edAll(r) {
+  const saved = planDays(r);
+  if (!PED || PED.r !== r) return saved;
+  return PED.i >= 0 ? saved.map((x, k) => k === PED.i ? PED.d : x) : saved.concat([PED.d]);
+}
+// 마지막 날짜 다음 평일 (금 → 월)
+function nextDay(r) {
+  const ds = planDays(r).map(d => d.date).filter(Boolean).sort(); const last = ds[ds.length - 1];
+  if (!last) return '';
+  const x = new Date(last + 'T00:00:00'); x.setDate(x.getDate() + (x.getDay() === 5 ? 3 : x.getDay() === 6 ? 2 : 1));
+  return x.getFullYear() + '-' + ('0' + (x.getMonth() + 1)).slice(-2) + '-' + ('0' + x.getDate()).slice(-2);
+}
 const secIn = v => KC.parseSec(v);
 const secOut = sec => sec ? TT.secShort(sec) : '';
 function gDefault(k, round) {
@@ -681,13 +697,15 @@ function eligibleN(k, round) {
   return D.participants.filter(p => p.groupKey === k && pass.has(p.id) && isActive(p)).length;
 }
 function planDays(r) {
+  if (PLANS.__d !== D) PLANS = { __d: D };   // 자료를 새로 받으면(저장·다른 관리자) 저장된 계획도 다시 읽기
   if (!PLANS[r]) PLANS[r] = D.plan.filter(x => x.round === r).map(x => Object.assign({}, x, { blocks: KC.parseBlocks(x.blocks) })).sort((a, b) => KC.cmpKo(a.date, b.date));
   return PLANS[r];
 }
 function planTab() {
   const r = ROUND, days = planDays(r);
-  const pa = KC.planAll(D.cfg, days);
-  const keys = D.groupKeys.filter(k => eligibleN(k, r) || days.some(d => d.blocks.some(b => b.groupKey === k)));
+  if (PED && PED.r !== r) PED = null;
+  const pa = KC.planAll(D.cfg, edAll(r));
+  const keys = D.groupKeys.filter(k => eligibleN(k, r) || edAll(r).some(d => d.blocks.some(b => b.groupKey === k)));
   const hasSes = D.sessions.some(s => s.round === r);
   view().innerHTML = '<div class="row" style="margin-bottom:14px"><div class="seg"><button data-r="R1" class="' + (r === 'R1' ? 'on' : '') + '">' + esc(rname('R1')) + '</button><button data-r="R2" class="' + (r === 'R2' ? 'on' : '') + '">' + esc(rname('R2')) + '</button></div><span class="sp"></span><a class="btn sm" href="schedule.html" target="_blank" rel="noopener">참가자 공개 시간표 ↗</a></div>' +
     '<div class="card"><div class="row"><h2 style="margin:0">부문별 기준</h2><span class="sp"></span><button class="sm" id="gsv">기준 저장</button></div>' +
@@ -695,15 +713,54 @@ function planTab() {
     '<div class="scroll"><table><thead><tr><th>부문</th><th class="n">대상 인원</th><th class="n">지방</th><th>1인 시간</th><th>조당 최대</th><th>이렇게 나뉘어요</th><th class="n">계획에 넣은 인원</th><th class="n">남은 인원</th></tr></thead><tbody>' +
     keys.map(k => { const df = gDefault(k, r), need = eligibleN(k, r), pl = pa.totals[k] || 0, far = r === 'R1' ? farN(k) : 0; return '<tr><td><b>' + esc(GL(k)) + '</b></td><td class="n">' + need + '</td><td class="n">' + (far ? '<span class="badge warn">' + far + '</span>' : '') + '</td><td><input data-gk="' + esc(k) + '" data-f="per" value="' + secOut(df.per) + '" style="width:80px;min-height:36px;padding:4px 8px"></td><td><input data-gk="' + esc(k) + '" data-f="size" value="' + df.size + '" inputmode="numeric" style="width:70px;min-height:36px;padding:4px 8px"></td><td class="small" data-split="' + esc(k) + '">' + splitTxt(need, df.size, df.per) + '</td><td class="n">' + (pl || '') + '</td><td class="n">' + (need - pl ? '<span class="badge ' + (need - pl > 0 ? 'warn' : 'bad') + '">' + (need - pl) + '</span>' : '<span class="badge ok">0</span>') + '</td></tr>'; }).join('') +
     '</tbody></table></div></div>' +
-    '<div class="card"><div class="row"><h2 style="margin:0">날짜별 계획</h2>' + (PLAN_DIRTY[r] ? '<span class="badge warn">저장 안 됨</span>' : '') + '<span class="sp"></span><button class="sm" id="pad">날짜 추가</button><button class="sm pri" id="psv">계획 저장</button><button class="sm" id="pap">계획대로 조편성</button></div>' +
-    '<p class="small muted">하루에 들어갈 부문을 순서대로 넣으면, 조 경연시간을 ' + esc(D.cfg.roundMin || 5) + '분 단위로 올리고 조 사이 ' + esc(D.cfg.sessionGap || 10) + '분을 띄워요. 오전 조는 오전 마감 전에 끝나도록 인원을 줄이고, 점심(최소 ' + esc(D.cfg.lunchMin || 60) + '분) 뒤 오후 시작 시각부터 이어 갑니다. 원하는 대로 안 나오면 \'조 인원 직접\'에 <code>13,18,18,18</code>처럼 적어요. 날마다 점심 최소·조 사이 쉬는 시간을 바꿀 수 있고, <b>긴 쉬는 시간</b>에 <code>15:00 20</code>을 적으면 15시 넘어 끝나는 첫 조 뒤에 20분을 쉬어요. 점심 앞뒤로 부문이 바뀌면 <b>중간채점</b>으로 표시하고 점심을 ' + esc(D.cfg.midScoreMin || 20) + '분 더 권해요.</p>' +
-    (days.length ? days.map((d, i) => dayCard(d, i, pa.days.find(x => x.day === d))).join('') : '<div class="empty">날짜를 추가해서 시작하세요.</div>') + '</div>' +
+    planListCard(r) + planEditCard(r, pa) +
     '<div class="card"><div class="row"><h2 style="margin:0">시간표 출력</h2><span class="sp"></span><div class="seg"><button data-src="plan" class="' + (srcOf(r) === 'plan' ? 'on' : '') + '">계획 기준</button><button data-src="real" class="' + (srcOf(r) === 'real' ? 'on' : '') + '" ' + (hasSes ? '' : 'disabled') + '>편성 결과 기준</button></div></div>' +
     '<p class="small muted">편성 전에는 계획으로 미리 보고, 편성 뒤에는 실제 조(옮긴 사람 반영)로 뽑으세요. 참가자 공개 페이지는 늘 편성 결과로 보여요.</p>' + (srcOf(r) === 'real' ? timeCheckCard(r).replace('<div class="card">', '<div class="panel" style="margin-top:8px">') : '') +
     '<div class="grid g2" style="margin-top:8px">' +
     [['wall', '벽보용 시간표 (구글 문서·워드)', '75회 예선·본선시간표(종합)처럼 큰 글씨 — 하루 한 장 + 부문별 장, 고쳐 쓰고 붙이기'], ['pub', '공개용 시간표', '참가자·홈페이지 공지용 — 1인 시간 빼고 날짜별 한 장'], ['int', '내부용 시간표', '운영진·심사위원용 — 1인 시간, 추첨 시각, 장소·피아노'], ['det', '세부일정표 (엑셀)', '대기(추첨)·시작·종료·경연시간·쉼시간·인당시간·조출'], ['cal', '달력형 (내부용)', '날짜 칸마다 부문·오전/오후 인원·1인 시간·피아노사용'], ['cals', '달력형 (전달용)', '학교·학원 전달용 — 부문·오전/오후만'], ['xls', '시간표·달력 엑셀', '공개용·내부용·세부일정표·달력 시트를 한 파일로']].map(b => '<button class="scard" data-o="' + b[0] + '" style="min-height:76px"><b>' + b[1] + '</b><div class="small muted" style="font-weight:500">' + b[2] + '</div></button>').join('') +
     '</div><div id="ttpv" style="margin-top:12px"></div></div>';
   bindPlan(r, days);
+}
+// 전체 일정표: 저장된 날짜를 모아 한눈에 — 날마다 수정·복사·삭제, 아래에 부문별로 남은 인원과 다음 단계
+function planListCard(r) {
+  const days = planDays(r), pa = KC.planAll(D.cfg, days), editing = PED && PED.r === r ? PED : null;
+  const rows = days.map((d, i) => {
+    const res = pa.days.find(x => x.day === d) || { items: [], warn: [] };
+    const by = {}; res.items.filter(x => x.type === 'session').forEach(x => { const o = by[x.groupKey] = by[x.groupKey] || { n: 0, k: 0 }; o.n += x.n; o.k++; });
+    const lunch = res.items.find(x => x.type === 'lunch');
+    const on = editing && editing.i === i;
+    return '<tr' + (on ? ' style="background:var(--accent-soft)"' : '') + '><td style="white-space:nowrap"><b>' + esc(App.fmtDate(d.date)) + '</b>' + (d.venue ? '<br><span class="small muted">' + esc(d.venue) + '</span>' : '') + '</td>' +
+      '<td class="num" style="white-space:nowrap">' + (res.start ? esc(res.start) + ' ~ ' + esc(res.end) : '') + (lunch ? '<br><span class="small muted">점심 ' + esc(lunch.start) + '~' + esc(lunch.end) + '</span>' : '') + '</td>' +
+      '<td class="small">' + (Object.keys(by).length ? Object.keys(by).map(k => '<b>' + esc(GL(k)) + '</b> ' + by[k].n + '명·' + by[k].k + '조').join('<br>') : '<span class="muted">부문 없음</span>') + '</td>' +
+      '<td class="small">' + (d.note ? esc(d.note) : '') + res.warn.map(w => ' <span class="badge warn">' + esc(w) + '</span>').join('') + '</td>' +
+      '<td style="white-space:nowrap">' + (on ? '<span class="badge">고치는 중</span>' : '<button class="sm" data-pe="' + i + '">수정</button><button class="sm" data-pc="' + i + '">복사</button><button class="sm danger" data-pdx="' + i + '">삭제</button>') + '</td></tr>';
+  }).join('');
+  // 부문별로 계획에 넣은 인원 vs 대상
+  const ks = D.groupKeys.filter(k => eligibleN(k, r) || pa.totals[k]);
+  const left = ks.map(k => ({ k, need: eligibleN(k, r), pl: pa.totals[k] || 0 })).filter(x => x.need !== x.pl);
+  const done = days.length && !left.length, hasSes = D.sessions.some(s => s.round === r), pub = D.cfg[r === 'R1' ? 'publishR1Schedule' : 'publishR2Schedule'] === 'Y';
+  const step = (n, t, on, body) => '<div style="flex:1;min-width:200px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;' + (on ? 'background:var(--accent-soft)' : '') + '"><div class="small muted">' + n + '단계</div><b>' + t + '</b><div class="small" style="margin-top:4px">' + body + '</div></div>';
+  return '<div class="card"><div class="row"><h2 style="margin:0">' + esc(rname(r)) + ' 전체 일정표</h2><span class="sp"></span>' +
+    '<button class="sm pri" id="pnew">새 날짜 만들기</button>' + (days.length ? '<button class="sm danger" id="pclr">계획 전부 지우기</button>' : '') + '</div>' +
+    '<p class="small muted">날짜마다 아래 편집 칸에서 부문을 넣고 <b>이 날짜 저장</b>을 누르면 여기에 모여요. 비슷한 날은 <b>복사</b>해서 날짜와 부문만 바꾸면 빨라요.</p>' +
+    (days.length ? '<div class="scroll"><table><thead><tr><th>날짜</th><th>시간</th><th>부문 · 인원 · 조</th><th>메모 · 확인할 것</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+      : '<div class="empty">아직 저장된 날짜가 없어요. <b>새 날짜 만들기</b>로 첫날부터 넣어 보세요.</div>') +
+    (ks.length ? '<div class="small" style="margin-top:10px">' + (left.length ? '<b>아직 안 맞는 부문</b> ' + left.map(x => '<span class="badge ' + (x.need > x.pl ? 'warn' : 'bad') + '" style="margin:2px">' + esc(GL(x.k)) + ' ' + (x.need > x.pl ? (x.need - x.pl) + '명 남음' : (x.pl - x.need) + '명 넘침') + '</span>').join('') : '<span class="badge ok">모든 부문 인원이 계획에 들어갔어요</span>') + '</div>' : '') +
+    '<div class="row" style="gap:8px;margin-top:14px;align-items:stretch">' +
+      step(1, '날짜별 계획', !done, done ? '완료 — ' + days.length + '일' : '모든 부문이 계획에 들어가면 다음 단계로') +
+      step(2, '계획대로 조편성', done && !hasSes, '<button class="sm ' + (done ? 'pri' : '') + '" id="pap">계획대로 조편성</button>' + (hasSes ? ' <span class="badge ok">편성됨</span>' : '')) +
+      step(3, '조편성 확인·발표', hasSes, '<button class="sm" id="gosched">조별 명단 확인</button> <button class="sm" id="gonotice">조편성 공지 만들기</button><br>' +
+        '<label class="inline" style="margin-top:6px"><input type="checkbox" id="pub2" ' + (pub ? 'checked' : '') + (hasSes ? '' : ' disabled') + '> 참가자 조회에 ' + esc(rname(r)) + ' 일정 공개 (발표)</label>') +
+    '</div></div>';
+}
+// 하루 편집 칸: 새 날짜·수정·복사본을 여기서 고치고 저장
+function planEditCard(r, pa) {
+  if (!PED || PED.r !== r) return '';
+  const head = PED.i >= 0 ? App.fmtDate(planDays(r)[PED.i].date) + ' 고치는 중' : PED.copyOf ? PED.copyOf + ' 복사본' : '새 날짜';
+  return '<div class="card" id="ped" style="border:2px solid var(--accent)"><div class="row"><h2 style="margin:0">' + esc(head) + '</h2>' + (PED.dirty ? '<span class="badge warn">저장 안 됨</span>' : '') +
+    '<span class="sp"></span><button class="sm" id="eclr">부문 전부 비우기</button><button class="sm" id="ecl">닫기</button><button class="sm pri" id="esv">이 날짜 저장</button></div>' +
+    '<p class="small muted">하루에 들어갈 부문을 순서대로 넣으면, 조 경연시간을 ' + esc(D.cfg.roundMin || 5) + '분 단위로 올리고 조 사이 ' + esc(D.cfg.sessionGap || 10) + '분을 띄워요. 오전 조는 오전 마감 전에 끝나도록 인원을 줄이고, 점심(최소 ' + esc(D.cfg.lunchMin || 60) + '분) 뒤 오후 시작 시각부터 이어 갑니다. 원하는 대로 안 나오면 \'조 인원 직접\'에 <code>13,18,18,18</code>처럼 적어요. <b>긴 쉬는 시간</b>에 <code>15:00 20</code>을 적으면 15시 넘어 끝나는 첫 조 뒤에 20분을 쉬어요.</p>' +
+    dayCard(PED.d, 0, pa.days.find(x => x.day === PED.d)).replace('<div class="panel" style="margin-top:12px"', '<div class="panel" style="margin-top:8px"') + '</div>';
 }
 function srcOf(r) { const has = D.sessions.some(s => s.round === r); return TT_SRC === 'auto' ? (has ? 'real' : 'plan') : (TT_SRC === 'real' && !has ? 'plan' : TT_SRC); }
 function dayCard(d, i, res) {
@@ -713,7 +770,7 @@ function dayCard(d, i, res) {
   return '<div class="panel" style="margin-top:12px" data-day="' + i + '"><div class="row" style="gap:6px">' +
     '<b>' + (d.date ? esc(App.fmtDate(d.date)) : '날짜') + '</b>' + ci('date', d.date, 150, '', 'date') +
     '<label class="small">시작</label>' + ci('start', d.start || '09:30', 108, '', 'time') + '<label class="small">오전 마감</label>' + ci('amEnd', d.amEnd || D.cfg.amEnd, 108, '', 'time') + '<label class="small">오후 시작</label>' + ci('pmStart', d.pmStart || D.cfg.pmStart, 108, '', 'time') +
-    '<label class="inline small"><input type="checkbox" data-d="' + i + '" data-f="piano" ' + (d.piano === 'Y' ? 'checked' : '') + '> 피아노 사용</label><span class="sp"></span><button class="sm danger" data-dx="' + i + '">날짜 삭제</button></div>' +
+    '<label class="inline small"><input type="checkbox" data-d="' + i + '" data-f="piano" ' + (d.piano === 'Y' ? 'checked' : '') + '> 피아노 사용</label></div>' +
     '<div class="row" style="gap:6px;margin-top:6px"><label class="small">점심 최소(분)</label>' + ci('lunchMin', d.lunchMin, 64, D.cfg.lunchMin || '60') + '<label class="small">조 사이 쉬는 시간(분)</label>' + ci('gap', d.gap, 56, D.cfg.sessionGap || '10') + '<label class="small">긴 쉬는 시간</label>' + ci('breaks', d.breaks, 150, '예: 15:00 20') + '</div>' +
     '<div class="row" style="gap:6px;margin-top:6px"><label class="small">장소</label>' + ci('venue', d.venue, 180, D.cfg.venue) + '<label class="small">메모</label>' + ci('note', d.note, 260, '예: 중간채점, 심사위원 교체') + '</div>' +
     '<div class="scroll" style="margin-top:8px"><table><thead><tr><th>부문</th><th>인원</th><th>1인 시간</th><th>조당</th><th>쉼(분)</th><th>오후부터</th><th>조 인원 직접 (선택)</th><th></th></tr></thead><tbody>' +
@@ -731,13 +788,18 @@ function dayPreview(res) {
     res.items.map(x => x.type === 'lunch' ? '<div style="color:var(--accent);font-weight:700">점심 ' + x.start + ' ~ ' + x.end + ' (' + (toM(x.end) - toM(x.start)) + '분' + (x.note ? ' · ' + esc(x.note) : '') + ')</div>' : x.type === 'break' ? '<div style="color:var(--accent)">쉬는 시간 ' + x.start + ' ~ ' + x.end + ' (' + (toM(x.end) - toM(x.start)) + '분)</div>' : '<div>' + esc(GL(x.groupKey).split(' ').slice(1).join(' ') || GL(x.groupKey)) + ' ' + x.no + '조 &nbsp;' + x.start + ' ~ ' + x.end + ' / ' + x.n + '명</div>').join('') + '</div></div>';
 }
 function bindPlan(r, days) {
-  const rerender = () => { PLAN_DIRTY[r] = true; const y = window.scrollY; planTab(); window.scrollTo(0, y); };
+  const y0 = () => window.scrollY;
+  const rerender = () => { if (PED) PED.dirty = true; const y = y0(); planTab(); window.scrollTo(0, y); };
+  const toEditor = () => setTimeout(() => { const e = $('#ped'); if (e) e.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+  const leaveEditor = () => !PED || !PED.dirty ? Promise.resolve(true) : confirmBox('고치고 있던 날짜를 저장하지 않고 닫을까요?', '저장 안 하고 닫기', true);
   const refreshPreview = () => {
-    PLAN_DIRTY[r] = true;
-    const pa = KC.planAll(D.cfg, days);
-    $$('[data-pv]').forEach(el => { const d = days[+el.dataset.pv]; el.innerHTML = dayPreview(pa.days.find(x => x.day === d)); });
+    if (!PED) return; PED.dirty = true;
+    const pa = KC.planAll(D.cfg, edAll(r));
+    $$('[data-pv]').forEach(el => { el.innerHTML = dayPreview(pa.days.find(x => x.day === PED.d)); });
+    const h = $('#ped h2'); if (h && !$('#ped .badge.warn')) h.insertAdjacentHTML('afterend', '<span class="badge warn">저장 안 됨</span>');
   };
-  $$('[data-r]').forEach(b => b.addEventListener('click', () => { ROUND = b.dataset.r; planTab(); }));
+  const savePlanList = (list, msg) => call('savePlan', { round: r, days: list }).then(() => { PLANS[r] = null; toast(msg, 'ok'); return refresh(); });
+  $$('[data-r]').forEach(b => b.addEventListener('click', () => { if (PED && PED.dirty && PED.r !== b.dataset.r) { toast('고치고 있는 날짜를 먼저 저장하거나 닫아 주세요', 'bad'); return; } ROUND = b.dataset.r; planTab(); }));
   $$('[data-src]').forEach(b => b.addEventListener('click', () => { TT_SRC = b.dataset.src; planTab(); }));
   $$('[data-gk]').forEach(inp => inp.addEventListener('input', () => {
     const k = inp.dataset.gk, cell = $$('[data-split]').find(x => x.dataset.split === k); if (!cell) return;
@@ -748,47 +810,95 @@ function bindPlan(r, days) {
     const rows = {}; $$('[data-gk]').forEach(inp => { const o = rows[inp.dataset.gk] = rows[inp.dataset.gk] || { groupKey: inp.dataset.gk }; if (inp.dataset.f === 'per') o[r === 'R2' ? 'perSec2' : 'perSec'] = String(secIn(inp.value) || ''); else o[r === 'R2' ? 'groupSize2' : 'groupSize'] = inp.value; });
     call('saveGroups', { groups: Object.values(rows) }).then(() => { toast('기준을 저장했어요', 'ok'); refresh(); }).catch(onErr);
   });
-  $('#pad').addEventListener('click', () => {
-    const last = days[days.length - 1]; let nd = '';
-    if (last && last.date) { const x = new Date(last.date + 'T00:00:00'); x.setDate(x.getDate() + (x.getDay() === 5 ? 3 : 1)); nd = x.getFullYear() + '-' + ('0' + (x.getMonth() + 1)).slice(-2) + '-' + ('0' + x.getDate()).slice(-2); }
-    days.push({ dayId: '', round: r, date: nd, start: '09:30', amEnd: D.cfg.amEnd, pmStart: D.cfg.pmStart, venue: last ? last.venue : '', piano: last ? last.piano : '', note: '', blocks: [] });
-    rerender();
-  });
-  $$('[data-dx]').forEach(b => b.addEventListener('click', () => { days.splice(+b.dataset.dx, 1); rerender(); }));
-  $$('[data-ba]').forEach(b => b.addEventListener('click', () => {
-    const d = days[+b.dataset.ba], pa = KC.planAll(D.cfg, days);
-    const k = D.groupKeys.find(g => eligibleN(g, r) - (pa.totals[g] || 0) > 0) || '';
-    const df = k ? gDefault(k, r) : { per: '', size: '' };
-    d.blocks.push({ groupKey: k, count: k ? eligibleN(k, r) - (pa.totals[k] || 0) : '', perSec: df.per, size: df.size, pmOnly: false, sizes: '' });
-    rerender();
+  // ── 전체 일정표: 새 날짜 · 수정 · 복사 · 삭제 · 전부 지우기
+  $('#pnew').addEventListener('click', () => leaveEditor().then(ok => {
+    if (!ok) return;
+    const last = days[days.length - 1];
+    PED = { r, i: -1, dirty: false, d: { dayId: '', round: r, date: nextDay(r), start: last ? last.start : '09:30', amEnd: last ? last.amEnd : D.cfg.amEnd, pmStart: last ? last.pmStart : D.cfg.pmStart,
+      lunchMin: last ? last.lunchMin : '', gap: last ? last.gap : '', breaks: '', venue: last ? last.venue : '', piano: last ? last.piano : '', note: '', blocks: [] } };
+    planTab(); toEditor();
   }));
-  const bj = s => s.split('|').map(Number);
-  $$('[data-bu]').forEach(b => b.addEventListener('click', () => { const [i, j] = bj(b.dataset.bu), a = days[i].blocks; [a[j - 1], a[j]] = [a[j], a[j - 1]]; rerender(); }));
-  $$('[data-bd]').forEach(b => b.addEventListener('click', () => { const [i, j] = bj(b.dataset.bd), a = days[i].blocks; [a[j + 1], a[j]] = [a[j], a[j + 1]]; rerender(); }));
-  $$('[data-bx]').forEach(b => b.addEventListener('click', () => { const [i, j] = bj(b.dataset.bx); days[i].blocks.splice(j, 1); rerender(); }));
-  $$('[data-d][data-f]').forEach(inp => {
-    const ev = inp.tagName === 'SELECT' || inp.type === 'checkbox' || inp.type === 'date' ? 'change' : 'input';
-    inp.addEventListener(ev, () => {
-      const d = days[+inp.dataset.d], f = inp.dataset.f;
-      const v = inp.type === 'checkbox' ? inp.checked : inp.value;
-      if (inp.dataset.b != null) {
-        const b = d.blocks[+inp.dataset.b];
-        if (f === 'perSec') b.perSec = secIn(v) || '';
-        else if (f === 'pmOnly') b.pmOnly = v;
-        else b[f] = v;
-        if (f === 'groupKey' && v) { const df = gDefault(v, r), pa = KC.planAll(D.cfg, days); b.perSec = df.per; b.size = df.size; b.count = Math.max(0, eligibleN(v, r) - ((pa.totals[v] || 0) - (+b.count || 0))); return rerender(); }
-      } else d[f] = f === 'piano' ? (v ? 'Y' : '') : v;
-      if (f === 'date') return rerender();
-      refreshPreview();
+  $$('[data-pe]').forEach(b => b.addEventListener('click', () => leaveEditor().then(ok => {
+    if (!ok) return; const i = +b.dataset.pe; PED = { r, i, dirty: false, d: cloneDay(days[i]) }; planTab(); toEditor();
+  })));
+  $$('[data-pc]').forEach(b => b.addEventListener('click', () => leaveEditor().then(ok => {
+    if (!ok) return;
+    const src = days[+b.dataset.pc];
+    const m = modal('<h2>' + esc(App.fmtDate(src.date)) + ' 복사</h2><p class="small muted">시작·오전 마감·오후 시작·점심·쉬는 시간·장소·피아노 같은 틀을 그대로 가져가요.</p>' +
+      '<label class="f" for="cpd">새 날짜</label><input type="date" id="cpd" value="' + esc(nextDay(r)) + '">' +
+      '<label class="inline" style="margin-top:10px"><input type="radio" name="cpm" value="all" checked> 부문까지 복사 <span class="small muted">— 인원은 아직 남은 인원으로 채워요 (부문을 바꾸면 다시 계산)</span></label>' +
+      '<label class="inline"><input type="radio" name="cpm" value="frame"> 시간 틀만 복사 <span class="small muted">— 부문은 비워 두고 새로 넣기</span></label>' +
+      '<div class="row end" style="margin-top:12px"><button data-close>취소</button><button class="pri" id="cpgo">복사해서 열기</button></div>');
+    $('#cpgo', m.el).addEventListener('click', () => {
+      const nd = $('#cpd', m.el).value; if (!nd) { toast('새 날짜를 골라 주세요', 'bad'); return; }
+      const all = m.el.querySelector('input[name=cpm]:checked').value === 'all', d = cloneDay(src);
+      const left = {}; const tot = KC.planAll(D.cfg, days).totals;
+      d.dayId = ''; d.date = nd;
+      d.blocks = all ? d.blocks.map(x => { const k = x.groupKey; if (!(k in left)) left[k] = Math.max(0, eligibleN(k, r) - (tot[k] || 0)); const c = Math.min(+x.count || 0, left[k]); left[k] -= c; return Object.assign(x, { count: c, sizes: '' }); }) : [];
+      m.close(); PED = { r, i: -1, dirty: true, copyOf: App.fmtDate(src.date), d }; planTab(); toEditor();
     });
-  });
-  $('#psv').addEventListener('click', e => {
-    if (days.some(d => !d.date)) { toast('날짜가 빈 계획이 있어요', 'bad'); return; }
-    busy(e.target, true);
-    call('savePlan', { round: r, days }).then(() => { PLANS[r] = null; PLAN_DIRTY[r] = false; toast('계획을 저장했어요', 'ok'); refresh(); }).catch(err => { busy(e.target, false); onErr(err); });
-  });
+  })));
+  $$('[data-pdx]').forEach(b => b.addEventListener('click', () => {
+    const i = +b.dataset.pdx;
+    confirmBox(App.fmtDate(days[i].date) + ' 계획을 지울까요? (이미 한 조편성은 그대로 남아요)', '지우기', true).then(ok => {
+      if (!ok) return;
+      if (PED && PED.r === r && PED.i === i) PED = null; else if (PED && PED.r === r && PED.i > i) PED.i--;
+      savePlanList(days.filter((_, k) => k !== i), '지웠어요').catch(onErr);
+    });
+  }));
+  const clr = $('#pclr'); if (clr) clr.addEventListener('click', () => confirmBox(rname(r) + ' 계획 ' + days.length + '일을 모두 지울까요? (이미 한 조편성은 그대로 남아요)', '전부 지우기', true).then(ok => {
+    if (!ok) return; PED = null; savePlanList([], '계획을 모두 지웠어요').catch(onErr);
+  }));
+  // ── 하루 편집 칸
+  if (PED && PED.r === r) {
+    const d = PED.d;
+    $('#esv').addEventListener('click', e => {
+      if (!d.date) { toast('날짜를 넣어 주세요', 'bad'); return; }
+      if (!d.blocks.length) { toast('부문을 하나 이상 넣어 주세요', 'bad'); return; }
+      if (d.blocks.some(b => !b.groupKey)) { toast('부문을 고르지 않은 줄이 있어요', 'bad'); return; }
+      const dup = days.some((x, k) => k !== PED.i && x.date === d.date);
+      (dup ? confirmBox(App.fmtDate(d.date) + ' 계획이 이미 있어요. 같은 날에 하나 더 둘까요? (장소가 다른 경우 등)', '하나 더 두기') : Promise.resolve(true)).then(ok => {
+        if (!ok) return; busy(e.target, true);
+        const list = edAll(r).slice().sort((a, b) => KC.cmpKo(a.date, b.date)), dt = App.fmtDate(d.date);
+        PED = null;
+        savePlanList(list, dt + ' 저장했어요').catch(err => { busy(e.target, false); onErr(err); });
+      });
+    });
+    $('#eclr').addEventListener('click', () => (d.blocks.length ? confirmBox('이 날짜에 넣은 부문 ' + d.blocks.length + '개를 모두 뺄까요? (날짜·시간 틀은 그대로)', '모두 빼기', true) : Promise.resolve(true)).then(ok => { if (ok) { d.blocks = []; rerender(); } }));
+    $('#ecl').addEventListener('click', () => leaveEditor().then(ok => { if (ok) { PED = null; planTab(); } }));
+    $$('[data-ba]').forEach(b => b.addEventListener('click', () => {
+      const pa = KC.planAll(D.cfg, edAll(r));
+      const k = D.groupKeys.find(g => eligibleN(g, r) - (pa.totals[g] || 0) > 0) || '';
+      const df = k ? gDefault(k, r) : { per: '', size: '' };
+      d.blocks.push({ groupKey: k, count: k ? eligibleN(k, r) - (pa.totals[k] || 0) : '', perSec: df.per, size: df.size, pmOnly: false, sizes: '' });
+      rerender();
+    }));
+    const bj = v => +v.split('|')[1];
+    $$('[data-bu]').forEach(b => b.addEventListener('click', () => { const j = bj(b.dataset.bu), a = d.blocks; [a[j - 1], a[j]] = [a[j], a[j - 1]]; rerender(); }));
+    $$('[data-bd]').forEach(b => b.addEventListener('click', () => { const j = bj(b.dataset.bd), a = d.blocks; [a[j + 1], a[j]] = [a[j], a[j + 1]]; rerender(); }));
+    $$('[data-bx]').forEach(b => b.addEventListener('click', () => { d.blocks.splice(bj(b.dataset.bx), 1); rerender(); }));
+    $$('#ped [data-d][data-f]').forEach(inp => {
+      const ev = inp.tagName === 'SELECT' || inp.type === 'checkbox' || inp.type === 'date' ? 'change' : 'input';
+      inp.addEventListener(ev, () => {
+        const f = inp.dataset.f, v = inp.type === 'checkbox' ? inp.checked : inp.value;
+        if (inp.dataset.b != null) {
+          const b = d.blocks[+inp.dataset.b];
+          if (f === 'perSec') b.perSec = secIn(v) || '';
+          else if (f === 'pmOnly') b.pmOnly = v;
+          else b[f] = v;
+          if (f === 'groupKey' && v) { const df = gDefault(v, r), pa = KC.planAll(D.cfg, edAll(r)); b.perSec = df.per; b.size = df.size; b.count = Math.max(0, eligibleN(v, r) - ((pa.totals[v] || 0) - (+b.count || 0))); return rerender(); }
+        } else d[f] = f === 'piano' ? (v ? 'Y' : '') : v;
+        if (f === 'date') return rerender();
+        refreshPreview();
+      });
+    });
+  }
+  // ── 다음 단계: 조편성 확인·발표
+  const gs = $('#gosched'); if (gs) gs.addEventListener('click', () => { TAB = 'sched'; location.hash = TAB; shell(); window.scrollTo(0, 0); });
+  const gn = $('#gonotice'); if (gn) gn.addEventListener('click', () => { TAB = 'notice'; NTYPE = r === 'R1' ? 'r1groups' : 'finalguide'; location.hash = TAB; shell(); window.scrollTo(0, 0); });
+  const pb = $('#pub2'); if (pb) pb.addEventListener('change', e => { const key = r === 'R1' ? 'publishR1Schedule' : 'publishR2Schedule'; call('setConfig', { values: { [key]: e.target.checked ? 'Y' : 'N' } }).then(() => { toast(e.target.checked ? '참가자 조회에 일정이 보여요 (발표)' : '일정을 숨겼어요', 'ok'); refresh(); }).catch(onErr); });
   $('#pap').addEventListener('click', () => {
-    if (PLAN_DIRTY[r]) { toast('먼저 계획을 저장해 주세요', 'bad'); return; }
+    if (PED && PED.r === r && PED.dirty) { toast('고치고 있는 날짜를 먼저 저장하거나 닫아 주세요', 'bad'); $('#ped').scrollIntoView({ behavior: 'smooth' }); return; }
     const pa = KC.planAll(D.cfg, days), ks = Object.keys(pa.totals);
     if (!ks.length) { toast('계획에 부문이 없어요'); return; }
     const lines = ks.map(k => { const need = eligibleN(k, r), pl = pa.totals[k]; return '<tr><td>' + esc(GL(k)) + '</td><td class="n">' + need + '</td><td class="n">' + pl + '</td><td>' + (need === pl ? '<span class="badge ok">편성</span>' : '<span class="badge bad">인원 안 맞음 — 건너뜀</span>') + '</td></tr>'; }).join('');
