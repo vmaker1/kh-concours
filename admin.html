@@ -769,10 +769,11 @@ function autoDialog(r) {
   const remainN = keys.reduce((a, k) => a + Math.max(0, eligibleN(k, r) - (tot[k] || 0)), 0), allN = keys.reduce((a, k) => a + eligibleN(k, r), 0);
   const inp = (id, lab, v, w, type) => '<div><label class="f" for="' + id + '">' + lab + '</label><input id="' + id + '" value="' + esc(v) + '"' + (type ? ' type="' + type + '"' : '') + ' style="width:' + (w || 110) + 'px"></div>';
   const m = modal('<h2>' + esc(rname(r)) + ' 자동으로 채우기</h2>' +
-    '<p class="small muted">악기 순서대로(피아노 → 바이올린 → 비올라 → 첼로 → 플루트 → 클라리넷 → 성악, 그 안에서 초 → 중 → 고 → 대학) 끊기지 않게 이어 넣어요. <b>하루에 악기는 2개까지</b>, 바뀔 때는 점심 때(중간채점 점심 넉넉히) 바뀌게 하고, 그 안에서 <b>날 수가 가장 적은 배치</b>를 찾아요. 넣은 뒤에도 날짜마다 고치거나 복사·삭제할 수 있어요.</p>' +
+    '<p class="small muted">악기 순서대로(피아노 → 바이올린 → 비올라 → 첼로 → 플루트 → 클라리넷 → 성악) 끊기지 않게 이어 넣어요. <b>하루에 악기는 2개까지</b>, 바뀔 때는 점심 때(중간채점 점심 넉넉히). <b>한 부문(예: 피아노 중등부)은 되도록 하루 안에</b> 끝내고, 하루에 다 못 하는 큰 부문만 날을 넘겨요. 그러려고 악기 안에서 초·중·고 순서를 바꿀 수 있어요. 이 안에서 <b>날 수가 가장 적은 배치</b>를 찾아요. 넣은 뒤에도 날짜마다 고치거나 복사·삭제할 수 있어요.</p>' +
     '<div class="row" style="gap:10px;flex-wrap:wrap">' + inp('afd', '첫날', saved.length ? nextDay(r) : '', 150, 'date') + inp('asd', '쉬는 날 (쉼표로)', '', 180) +
       '<div><label class="f">&nbsp;</label><label class="inline"><input type="checkbox" id="awk" checked> 토·일요일 빼기</label></div>' +
-      '<div><label class="f">&nbsp;</label><label class="inline"><input type="checkbox" id="als" checked> 악기는 점심 때만 바뀌게 (오전 A · 오후 B)</label></div></div>' +
+      '<div><label class="f">&nbsp;</label><label class="inline"><input type="checkbox" id="als" checked> 악기는 점심 때만 바뀌게 (오전 A · 오후 B)</label></div>' +
+      '<div><label class="f">&nbsp;</label><label class="inline"><input type="checkbox" id="asp" checked> 부문은 되도록 하루 안에 끝내기</label></div></div>' +
     '<div class="row" style="gap:10px;flex-wrap:wrap;margin-top:6px">' + inp('ast', '시작', '09:50', 110, 'time') + inp('aam', '오전 마감', '12:30', 110, 'time') + inp('alm', '점심(분)', '60', 70) + inp('apm', '오후 시작', '13:30', 110, 'time') + inp('aen', '마칠 시각', '17:30', 110, 'time') + '</div>' +
     '<div class="row" style="gap:10px;flex-wrap:wrap;margin-top:6px">' + inp('asz', '조당 인원', r === 'R1' ? '10' : String(+D.cfg.groupSize2 || 7), 70) + inp('agp', '조 사이(분)', '0', 70) + inp('are', '쉬기: 몇 조마다', '2', 70) + inp('arm', '쉬는 시간(분)', '10', 70) + inp('avn', '장소', D.cfg.venue || '', 200) + '</div>' +
     '<div class="panel" style="margin-top:10px">' + (saved.length ?
@@ -795,16 +796,22 @@ function autoDialog(r) {
     const taken = mode === 'all' ? [] : saved.map(d => d.date);
     const opt = { round: r, firstDate: fd, skipDates: parseSkip(v('asd'), fd.slice(0, 4)).concat(taken), skipWeekend: $('#awk', m.el).checked, items,
       start: v('ast'), amEnd: v('aam'), lunchMin: v('alm'), pmStart: v('apm'), endBy: v('aen'), size: v('asz'), gap: v('agp'), restEvery: v('are'), restMin: v('arm'), venue: v('avn'),
-      lunchSwitchOnly: $('#als', m.el).checked };
+      lunchSwitchOnly: $('#als', m.el).checked, avoidSplit: $('#asp', m.el).checked };
     let alt = null;
     try {
       result = KC.autoPlan(D.cfg, opt);
-      if (opt.lunchSwitchOnly) { alt = KC.autoPlan(D.cfg, Object.assign({}, opt, { lunchSwitchOnly: false })); if (!(alt.days.length < result.days.length && !alt.left.length)) alt = null; }
+      // 켜 둔 규칙을 풀면 날이 줄어드는지 (덜 푸는 쪽 먼저)
+      const tries = [];
+      if (opt.lunchSwitchOnly) tries.push({ lunchSwitchOnly: false, why: '오후 중간에도 악기를 바꾸면' });
+      if (opt.avoidSplit) tries.push({ avoidSplit: false, why: '부문이 날을 넘겨도 되면' });
+      if (opt.lunchSwitchOnly && opt.avoidSplit) tries.push({ lunchSwitchOnly: false, avoidSplit: false, why: '두 규칙을 모두 풀면' });
+      tries.forEach(t => { if (alt && alt.days.length <= result.days.length - 1 && t.lunchSwitchOnly === false && t.avoidSplit === false) return; const a = KC.autoPlan(D.cfg, Object.assign({}, opt, t)); if (a.days.length < result.days.length && !a.left.length && (!alt || a.days.length < alt.days.length)) { alt = a; alt.why = t.why; } });
     } catch (e) { toast(e.message, 'bad'); return; }
     const instOf = (x, L, pm) => [...new Set(x.items.filter(i => i.type === 'session' && (!L || (pm ? i.start >= L.end : i.end <= L.start))).map(i => i.groupKey.split('|')[0]))].join('+') || '-';
     const pa = KC.planAll(D.cfg, result.days);
     $('#aout', m.el).innerHTML = (result.days.length ? '<p class="small"><b>' + result.days.length + '일</b> · ' + esc(App.fmtDate(result.days[0].date)) + ' ~ ' + esc(App.fmtDate(result.days[result.days.length - 1].date)) + '</p>' +
-      (alt ? '<div class="note small" style="margin:6px 0">오후 중간에도 악기를 바꿀 수 있게 하면 <b>' + alt.days.length + '일</b>로 ' + (result.days.length - alt.days.length) + '일 줄어요 (그날은 심사위원 교체 시간이 필요해요). 원하면 위의 \'악기는 점심 때만\'을 끄고 다시 미리 보기.</div>' : '') +
+      (result.splits.length ? '<div class="small" style="margin:4px 0">날을 넘긴 부문: ' + result.splits.map(k => '<span class="badge ' + (result.forced.includes(k) ? '' : 'warn') + '">' + esc(GL(k)) + (result.forced.includes(k) ? ' (하루에 다 못 함)' : '') + '</span>').join(' ') + '</div>' : '<div class="small" style="margin:4px 0"><span class="badge ok">모든 부문이 하루 안에 끝나요</span></div>') +
+      (alt ? '<div class="note small" style="margin:6px 0">' + esc(alt.why) + ' <b>' + alt.days.length + '일</b>로 ' + (result.days.length - alt.days.length) + '일 줄어요. 원하면 위의 체크를 끄고 다시 미리 보기.</div>' : '') +
       '<div class="scroll" style="max-height:46vh"><table><thead><tr><th>날짜</th><th>시간</th><th>점심</th><th>악기 (오전 · 오후)</th><th>부문 · 조별 인원</th></tr></thead><tbody>' +
       pa.days.map(x => { const by = {}; x.items.filter(i => i.type === 'session').forEach(i => (by[i.groupKey] = by[i.groupKey] || []).push(i.n)); const L = x.items.find(i => i.type === 'lunch');
         return '<tr><td style="white-space:nowrap"><b>' + esc(App.fmtDate(x.day.date)) + '</b></td><td class="num" style="white-space:nowrap">' + esc(x.start) + ' ~ ' + esc(x.end) + '</td><td class="small" style="white-space:nowrap">' + (L ? esc(L.start) + '~' + esc(L.end) + (L.note ? ' <span class="badge">' + esc(L.note) + '</span>' : '') : '') + '</td>' +
