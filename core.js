@@ -346,40 +346,82 @@ var KC = (function () {
     });
     return best ? best.sec : 0;
   }
-  /* 자동으로 채우기 — 첫날만 정하면 부문 순서대로 날마다 꽉 채워 넣음 (주말·쉬는 날 건너뜀)
+  /* 자동으로 채우기 — 첫날만 정하면 부문 순서대로 날마다 채워 넣음 (주말·쉬는 날 건너뜀)
+   * 규칙: 악기(부문의 앞 이름: 피아노·바이올린…)는 순서대로 끊기지 않고 이어짐 · 하루에 악기는 2개까지
+   *       악기가 바뀌는 날은 되도록 점심 때 바뀌게(오전 A · 오후 B, 중간채점 점심 넉넉히) · 날 수는 가장 적게
+   * 조(10명 안팎으로 고르게 나눈 것) 단위로 하루 묶음과 점심 자리를 모두 따져 보고 가장 나은 배치를 고름(동적 계획법)
    * o: { round, firstDate, start, amEnd, pmStart, lunchMin, endBy, gap, restEvery, restMin, size, venue, skipWeekend, skipDates:[yyyy-mm-dd],
+   *      lunchSwitchOnly(기본 true: 악기는 점심 때만 바뀜, false면 날 수를 줄이려고 오후 중간에도 바꿀 수 있음),
    *      items: [{ groupKey, count, perSec }] (넣을 순서대로) } → { days, left: [{groupKey, count}] } */
   function autoPlan(cfg, o) {
-    var endBy = toMin(o.endBy || '17:30'), size = +o.size || 10, skip = {}, maxDays = +o.maxDays || 40;
+    var size = +o.size || 10, skip = {}, maxDays = +o.maxDays || 40;
+    var st = toMin(o.start || '09:50'), amEnd = toMin(o.amEnd || '12:30'), pmStart = toMin(o.pmStart || '13:30'), endBy = toMin(o.endBy || '17:30');
+    var lunchMin = +o.lunchMin || 60, every = o.restEvery != null ? +o.restEvery : 2, restLen = o.restMin != null ? +o.restMin : 10, gap = o.gap != null ? +o.gap : 0;
+    var midLunch = lunchMin + (+cfg.midScoreMin || 0);   // 악기가 바뀌는 점심은 중간채점 몫까지 (75회: 80분 이상)
     (o.skipDates || []).forEach(function (d) { skip[normDate(d)] = 1; });
-    // 부문마다 조당 인원으로 고르게 나눠 조 단위 줄을 만듦 (예: 43명 → 9·9·9·8·8)
-    var q = [];
-    (o.items || []).forEach(function (x) { splitSizes(+x.count || 0, size).forEach(function (n) { q.push({ groupKey: s(x.groupKey), n: n, perSec: x.perSec }); }); });
-    var dt = new Date(normDate(o.firstDate) + 'T00:00:00'), days = [];
-    if (isNaN(dt.getTime())) throw new Error('첫날을 골라 주세요.');
-    var ymd = function (x) { return x.getFullYear() + '-' + ('0' + (x.getMonth() + 1)).slice(-2) + '-' + ('0' + x.getDate()).slice(-2); };
-    var free = function () { while ((o.skipWeekend !== false && (dt.getDay() === 0 || dt.getDay() === 6)) || skip[ymd(dt)]) dt.setDate(dt.getDate() + 1); };
-    while (q.length && days.length < maxDays) {
-      free();
-      var day = { round: o.round || 'R1', date: ymd(dt), start: o.start || '09:50', amEnd: o.amEnd || '12:30', pmStart: o.pmStart || '13:30', lunchMin: s(o.lunchMin || 60),
-        endBy: o.endBy || '17:30', gap: s(o.gap != null ? o.gap : 0), restEvery: s(o.restEvery != null ? o.restEvery : 2), restMin: s(o.restMin != null ? o.restMin : 10),
-        venue: s(o.venue), piano: '', note: '', breaks: '', blocks: [] };
-      // 조를 하나씩 붙여 보다가, 마칠 시각을 넘기면 그 조부터 다음 날로 (점심은 planDay가 오전 마감에 맞춰 넣음)
-      while (q.length) {
-        var g = q[0], last = day.blocks[day.blocks.length - 1], added;
-        if (last && last.groupKey === g.groupKey) { last.sizes += ',' + g.n; last.count += g.n; added = 'size'; }
-        else { day.blocks.push({ groupKey: g.groupKey, count: g.n, perSec: g.perSec, size: size, pmOnly: false, sizes: String(g.n) }); added = 'block'; }
-        var r = planDay(cfg, day);
-        if (r.end && toMin(r.end) <= endBy) { q.shift(); continue; }
-        if (added === 'block') day.blocks.pop(); else { last.sizes = last.sizes.replace(/,\d+$/, ''); last.count -= g.n; }
-        break;
+    var G = [];
+    (o.items || []).forEach(function (x) {
+      var per = parseSec(x.perSec) || +x.perSec || 200;
+      splitSizes(+x.count || 0, size).forEach(function (n) { G.push({ groupKey: s(x.groupKey), inst: s(x.groupKey).split('|')[0], n: n, per: per, dur: durMin(cfg, n, per) }); });
+    });
+    var N = G.length;
+    if (isNaN(new Date(normDate(o.firstDate) + 'T00:00:00').getTime())) throw new Error('첫날을 골라 주세요.');
+    // 오전·오후 한 덩이 [a, b)를 t0부터 이어 붙였을 때 끝나는 시각 (N조마다 쉬기)
+    function run(t0, a, b) { var t = t0, end = t0, c = 0; for (var k = a; k < b; k++) { end = t + G[k].dur; c++; t = end + (every && c % every === 0 ? restLen : gap); } return end; }
+    // 하루 [i, j): 점심 자리 k(오전 [i,k) · 오후 [k,j))를 모두 따져 가장 나은 것
+    function dayCost(i, j) {
+      var insts = []; for (var x = i; x < j; x++) if (insts[insts.length - 1] !== G[x].inst) insts.push(G[x].inst);
+      if (insts.length > 2) return null;                                   // 하루 3악기 안 됨
+      var sw = -1; if (insts.length === 2) for (x = i + 1; x < j; x++) if (G[x].inst !== G[x - 1].inst) { sw = x; break; }
+      var best = null;
+      for (var k = i; k <= j; k++) {
+        var mEnd = k > i ? run(st, i, k) : st;
+        if (mEnd > amEnd) break;
+        var pmT = k > i ? Math.max(mEnd + lunchMin, pmStart) : pmStart, aEnd = j > k ? run(pmT, k, j) : mEnd;
+        if (aEnd > endBy) continue;
+        var c = 10000, why = '';
+        if (sw >= 0) {
+          if (sw === k) { if (pmT - mEnd < midLunch) { c += 120; why = 'lunchShort'; } else why = 'lunch'; }
+          else { if (o.lunchSwitchOnly !== false) continue; c += 400; why = 'mid'; }   // 오전·오후 중간에 바뀜 — 기본은 안 함
+        }
+        c += (k > i ? amEnd - mEnd : amEnd - st);                           // 오전 빈 시간
+        if (j < N) c += (j > k ? endBy - aEnd : endBy - pmStart) * 0.5;      // 오후 빈 시간 (마지막 날 빼고)
+        if (j < N && G[j].groupKey === G[j - 1].groupKey) c += 15;           // 한 부문이 날을 넘어감
+        if (!best || c < best.c) best = { c: c, k: k, why: why, end: aEnd };
       }
-      if (!day.blocks.length) break;                            // 하루에 한 조도 안 들어가면 멈춤 (시간 설정 확인)
-      day.piano = day.blocks.some(function (x) { return /^피아노/.test(x.groupKey); }) ? 'Y' : '';
-      days.push(day);
-      dt.setDate(dt.getDate() + 1);
+      return best;
     }
-    var left = {}; q.forEach(function (x) { left[x.groupKey] = (left[x.groupKey] || 0) + x.n; });
+    var B = [0], P = [];
+    for (var j = 1; j <= N; j++) {
+      B[j] = Infinity;
+      for (var i = j - 1; i >= 0; i--) {
+        if (B[i] === Infinity) continue;
+        var dc = dayCost(i, j);
+        if (!dc) { if (run(st, i, j) > endBy + 600) break; continue; }
+        if (B[i] + dc.c < B[j]) { B[j] = B[i] + dc.c; P[j] = { i: i, d: dc }; }
+      }
+    }
+    // 들어가는 데까지 (한 조도 안 들어가면 0)
+    var reach = N; while (reach > 0 && B[reach] === Infinity) reach--;
+    var segs = []; for (var e = reach; e > 0; e = P[e].i) segs.unshift({ i: P[e].i, j: e, k: P[e].d.k, why: P[e].d.why });
+    // 날짜 붙이기 (주말·쉬는 날 건너뜀) → 하루 계획(blocks: 같은 부문은 한 줄, 오후 첫 줄은 '오후부터')
+    var dt = new Date(normDate(o.firstDate) + 'T00:00:00'), days = [];
+    var ymd = function (z) { return z.getFullYear() + '-' + ('0' + (z.getMonth() + 1)).slice(-2) + '-' + ('0' + z.getDate()).slice(-2); };
+    segs.slice(0, maxDays).forEach(function (sg) {
+      while ((o.skipWeekend !== false && (dt.getDay() === 0 || dt.getDay() === 6)) || skip[ymd(dt)]) dt.setDate(dt.getDate() + 1);
+      var blocks = [];
+      for (var x = sg.i; x < sg.j; x++) {
+        var g = G[x], pm = x === sg.k && x > sg.i, last = blocks[blocks.length - 1];
+        if (last && last.groupKey === g.groupKey && !pm) { last.sizes += ',' + g.n; last.count += g.n; }
+        else blocks.push({ groupKey: g.groupKey, count: g.n, perSec: g.per, size: size, pmOnly: pm, sizes: String(g.n) });
+      }
+      days.push({ round: o.round || 'R1', date: ymd(dt), start: fromMin(st), amEnd: fromMin(amEnd), pmStart: fromMin(pmStart), lunchMin: s(lunchMin), endBy: fromMin(endBy),
+        gap: s(gap), restEvery: s(every), restMin: s(restLen), venue: s(o.venue), piano: blocks.some(function (b) { return /^피아노/.test(b.groupKey); }) ? 'Y' : '',
+        note: sg.why === 'lunch' || sg.why === 'lunchShort' ? '점심 때 악기 바뀜 (중간채점)' : sg.why === 'mid' ? '중간에 악기 바뀜 — 심사위원 교체 시간 확인' : '', breaks: '', blocks: blocks });
+      dt.setDate(dt.getDate() + 1);
+    });
+    var done = segs.slice(0, maxDays).reduce(function (a, sg) { return Math.max(a, sg.j); }, 0), left = {};
+    for (var z = done; z < N; z++) left[G[z].groupKey] = (left[G[z].groupKey] || 0) + G[z].n;
     return { days: days, left: Object.keys(left).map(function (k) { return { groupKey: k, count: left[k] }; }) };
   }
   // 여러 날을 이어서: 조 번호는 같은 부문 안에서 날짜를 넘어 이어짐 (예: 피아노 초등부 8조는 다음 날 오전)
