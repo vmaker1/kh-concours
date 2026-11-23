@@ -23,7 +23,7 @@ var KC = (function () {
     Submissions: ['subId', 'sessionId', 'judgeId', 'submittedAt'],
     Logs: ['time', 'actor', 'action', 'detail'],
     // 시간표 설계: 날짜(경연일) 하루가 한 줄. blocks = 그날 들어갈 부문 목록(JSON)
-    Plan: ['dayId', 'round', 'date', 'start', 'amEnd', 'pmStart', 'lunchMin', 'gap', 'breaks', 'venue', 'piano', 'note', 'blocks'],
+    Plan: ['dayId', 'round', 'date', 'start', 'amEnd', 'pmStart', 'lunchMin', 'gap', 'breaks', 'venue', 'piano', 'note', 'blocks', 'endBy', 'restEvery', 'restMin'],
     // 심사위원·진행요원 — 본인이 링크로 들어와 정보 입력. 주민번호·계좌번호는 브라우저에서 암호화된 값(E1.…)만 저장
     Staff: ['staffId', 'kind', 'name', 'affiliation', 'title', 'orgHead', 'phone', 'email', 'birth', 'zip', 'address',
       'bank', 'holder', 'accountMask', 'accountEnc', 'rrnMask', 'rrnEnc', 'idFile', 'bankFile', 'sign', 'idCheck',
@@ -234,8 +234,11 @@ var KC = (function () {
     var lunchMin = +day.lunchMin || +cfg.lunchMin || 60, lead = +cfg.drawLeadMin || 30, minSize = +cfg.minGroupSize || 6;
     var t = toMin(day.start || '09:30'), amEnd = toMin(day.amEnd || cfg.amEnd || '12:00'), pmStart = toMin(day.pmStart || cfg.pmStart || '13:00');
     var items = [], warn = [], prevEnd = null, lunchDone = t >= amEnd, breaks = parseBreaks(day.breaks), lastGap = gap;
+    // N조마다 M분 쉬기 (예: 2조마다 10분) — 점심 뒤에는 다시 셈
+    var every = +day.restEvery || 0, restLen = +day.restMin || 10, sc = 0;
     function lunch() {
       if (lunchDone) return;
+      sc = 0;
       if (items.length && items[items.length - 1].type === 'break') items.pop();   // 바로 점심이면 쉬는 시간은 점심에 합침
       var ls = prevEnd != null ? prevEnd : t, le = Math.max(ls + lunchMin, pmStart);
       if (prevEnd != null) items.push({ type: 'lunch', start: fromMin(ls), end: fromMin(le) });
@@ -262,8 +265,10 @@ var KC = (function () {
         }
         var d = durMin(cfg, want, per);
         items.push({ type: 'session', groupKey: s(b.groupKey), n: want, start: fromMin(t), end: fromMin(t + d), dur: d, perSec: per, draw: fromMin(t - lead) });
-        prevEnd = t + d; rem -= want; si++;
-        if (!rest()) t = prevEnd + bg;
+        prevEnd = t + d; rem -= want; si++; sc++;
+        if (rest()) continue;
+        if (every && sc % every === 0) { items.push({ type: 'break', start: fromMin(prevEnd), end: fromMin(prevEnd + restLen) }); t = prevEnd + restLen; }
+        else t = prevEnd + bg;
       }
     });
     while (items.length && items[items.length - 1].type !== 'session') items.pop();   // 마지막 조 뒤 쉬는 시간·점심은 빼기
@@ -279,6 +284,7 @@ var KC = (function () {
     });
     breaks.forEach(function (b) { if (!b.used) warn.push(fromMin(b.at) + ' 쉬는 시간을 넣을 자리가 없어요'); });
     var end = prevEnd != null ? fromMin(prevEnd) : '';
+    if (end && s(day.endBy) && toMin(end) > toMin(day.endBy)) warn.push('마칠 시각(' + normTime(day.endBy) + ')보다 ' + (toMin(end) - toMin(day.endBy)) + '분 늦게 끝나요');
     warn = warn.concat(checkTimes(cfg, items.filter(function (x) { return x.type === 'session'; }).map(function (x) { return { start: x.start, end: x.end, label: s(x.groupKey).split('|')[1] + ' ' + (x.no || '') }; }), { lunchMin: lunchMin, amEnd: amEnd, pmStart: pmStart, skipGap: true }));
     return { items: items, start: items.length ? items.filter(function (x) { return x.type === 'session'; })[0].start : '', end: end, warn: warn };
   }
@@ -296,7 +302,8 @@ var KC = (function () {
     opt = opt || {};
     var w = [], L = list.filter(function (x) { return x.start && x.end; }).slice().sort(function (a, b) { return toMin(a.start) - toMin(b.start); });
     if (!L.length) return w;
-    var minGap = s(cfg.minGap) !== '' ? +cfg.minGap : 5, lunchMin = opt.lunchMin || +cfg.lunchMin || 60, brk = +cfg.breakMin || 15, maxRun = +cfg.maxRunMin || 0;
+    var minGap = s(cfg.minGap) !== '' ? +cfg.minGap : 5; if (opt.minGap != null && opt.minGap < minGap) minGap = opt.minGap;   // 그날 계획에서 조 사이를 더 짧게 정했으면 그 값으로
+    var lunchMin = opt.lunchMin || +cfg.lunchMin || 60, brk = +cfg.breakMin || 15, maxRun = +cfg.maxRunMin || 0;
     var amEnd = opt.amEnd != null ? opt.amEnd : toMin(cfg.amEnd || '12:00'), pmStart = opt.pmStart != null ? opt.pmStart : toMin(cfg.pmStart || '13:00');
     var bestLunch = 0, runStart = toMin(L[0].start);
     for (var i = 1; i < L.length; i++) {
@@ -324,7 +331,7 @@ var KC = (function () {
     Object.keys(by).forEach(function (k) {
       var pr = k.split('|'), p = (plan || []).filter(function (d) { return d.round === pr[0] && d.date === pr[1]; })[0] || {};
       var w = checkTimes(cfg, by[k].map(function (x) { return { start: x.startTime, end: x.endTime, label: s(x.groupKey).split('|').join(' ') + ' ' + (x.label || x.no + '조') }; }),
-        { lunchMin: +p.lunchMin || 0, amEnd: p.amEnd ? toMin(p.amEnd) : null, pmStart: p.pmStart ? toMin(p.pmStart) : null });
+        { lunchMin: +p.lunchMin || 0, amEnd: p.amEnd ? toMin(p.amEnd) : null, pmStart: p.pmStart ? toMin(p.pmStart) : null, minGap: s(p.gap) !== '' ? +p.gap : null });
       if (w.length) out[k] = w;
     });
     return out;
@@ -338,6 +345,42 @@ var KC = (function () {
       if (!best || (m[2] && !best.cat)) best = { cat: m[2] || '', sec: parseSec(m[3]) };
     });
     return best ? best.sec : 0;
+  }
+  /* 자동으로 채우기 — 첫날만 정하면 부문 순서대로 날마다 꽉 채워 넣음 (주말·쉬는 날 건너뜀)
+   * o: { round, firstDate, start, amEnd, pmStart, lunchMin, endBy, gap, restEvery, restMin, size, venue, skipWeekend, skipDates:[yyyy-mm-dd],
+   *      items: [{ groupKey, count, perSec }] (넣을 순서대로) } → { days, left: [{groupKey, count}] } */
+  function autoPlan(cfg, o) {
+    var endBy = toMin(o.endBy || '17:30'), size = +o.size || 10, skip = {}, maxDays = +o.maxDays || 40;
+    (o.skipDates || []).forEach(function (d) { skip[normDate(d)] = 1; });
+    // 부문마다 조당 인원으로 고르게 나눠 조 단위 줄을 만듦 (예: 43명 → 9·9·9·8·8)
+    var q = [];
+    (o.items || []).forEach(function (x) { splitSizes(+x.count || 0, size).forEach(function (n) { q.push({ groupKey: s(x.groupKey), n: n, perSec: x.perSec }); }); });
+    var dt = new Date(normDate(o.firstDate) + 'T00:00:00'), days = [];
+    if (isNaN(dt.getTime())) throw new Error('첫날을 골라 주세요.');
+    var ymd = function (x) { return x.getFullYear() + '-' + ('0' + (x.getMonth() + 1)).slice(-2) + '-' + ('0' + x.getDate()).slice(-2); };
+    var free = function () { while ((o.skipWeekend !== false && (dt.getDay() === 0 || dt.getDay() === 6)) || skip[ymd(dt)]) dt.setDate(dt.getDate() + 1); };
+    while (q.length && days.length < maxDays) {
+      free();
+      var day = { round: o.round || 'R1', date: ymd(dt), start: o.start || '09:50', amEnd: o.amEnd || '12:30', pmStart: o.pmStart || '13:30', lunchMin: s(o.lunchMin || 60),
+        endBy: o.endBy || '17:30', gap: s(o.gap != null ? o.gap : 0), restEvery: s(o.restEvery != null ? o.restEvery : 2), restMin: s(o.restMin != null ? o.restMin : 10),
+        venue: s(o.venue), piano: '', note: '', breaks: '', blocks: [] };
+      // 조를 하나씩 붙여 보다가, 마칠 시각을 넘기면 그 조부터 다음 날로 (점심은 planDay가 오전 마감에 맞춰 넣음)
+      while (q.length) {
+        var g = q[0], last = day.blocks[day.blocks.length - 1], added;
+        if (last && last.groupKey === g.groupKey) { last.sizes += ',' + g.n; last.count += g.n; added = 'size'; }
+        else { day.blocks.push({ groupKey: g.groupKey, count: g.n, perSec: g.perSec, size: size, pmOnly: false, sizes: String(g.n) }); added = 'block'; }
+        var r = planDay(cfg, day);
+        if (r.end && toMin(r.end) <= endBy) { q.shift(); continue; }
+        if (added === 'block') day.blocks.pop(); else { last.sizes = last.sizes.replace(/,\d+$/, ''); last.count -= g.n; }
+        break;
+      }
+      if (!day.blocks.length) break;                            // 하루에 한 조도 안 들어가면 멈춤 (시간 설정 확인)
+      day.piano = day.blocks.some(function (x) { return /^피아노/.test(x.groupKey); }) ? 'Y' : '';
+      days.push(day);
+      dt.setDate(dt.getDate() + 1);
+    }
+    var left = {}; q.forEach(function (x) { left[x.groupKey] = (left[x.groupKey] || 0) + x.n; });
+    return { days: days, left: Object.keys(left).map(function (k) { return { groupKey: k, count: left[k] }; }) };
   }
   // 여러 날을 이어서: 조 번호는 같은 부문 안에서 날짜를 넘어 이어짐 (예: 피아노 초등부 8조는 다음 날 오전)
   function planAll(cfg, days) {
@@ -1190,7 +1233,8 @@ var KC = (function () {
     var round = p.round === 'R2' ? 'R2' : 'R1';
     var rows = (p.days || []).map(function (d, i) {
       return { dayId: s(d.dayId) || (round + '-' + db.store.uid().slice(0, 8)), round: round, date: normDate(d.date), start: normTime(d.start), amEnd: normTime(d.amEnd), pmStart: normTime(d.pmStart),
-        lunchMin: s(d.lunchMin), gap: s(d.gap), breaks: s(d.breaks), venue: s(d.venue), piano: s(d.piano), note: s(d.note), blocks: JSON.stringify(parseBlocks(d.blocks)) };
+        lunchMin: s(d.lunchMin), gap: s(d.gap), breaks: s(d.breaks), venue: s(d.venue), piano: s(d.piano), note: s(d.note), blocks: JSON.stringify(parseBlocks(d.blocks)),
+        endBy: normTime(d.endBy), restEvery: s(d.restEvery), restMin: s(d.restMin) };
     });
     db.replaceWhere('Plan', function (x) { return x.round === round; }, rows);
     db.log('admin', 'savePlan', round + ' ' + rows.length + '일');
@@ -2191,7 +2235,7 @@ var KC = (function () {
     normDate: normDate, normTime: normTime, cmpKo: cmpKo, digits: digits, randToken: randToken,
     parsePieces: parsePieces, normPieces: normPieces, piecesFor: piecesFor, pieceLine: pieceLine, piecesText: piecesText,
     splitDivision: splitDivision, normCategory: normCategory, pieceEditState: pieceEditState, regionOf: regionOf, isFar: isFar,
-    planDay: planDay, planAll: planAll, durMin: durMin, parseSec: parseSec, fmtSec: fmtSec, parseBlocks: parseBlocks,
+    planDay: planDay, planAll: planAll, autoPlan: autoPlan, durMin: durMin, parseSec: parseSec, fmtSec: fmtSec, parseBlocks: parseBlocks,
     withholding: withholding, prizeTable: prizeTable, prizeAmount: prizeAmount, workMinutes: workMinutes, staffPay: staffPay, weekKey: weekKey,
     parseIdText: parseIdText, parseBankText: parseBankText, judgeCovers: judgeCovers,
     parseJudgeRates: parseJudgeRates, judgeDayFee: judgeDayFee, parseDayInfo: parseDayInfo, dayInfoStr: dayInfoStr, isWeekend: isWeekend,
