@@ -205,26 +205,38 @@ var DF = (function () {
     return '<w:r><w:rPr><w:rFonts w:ascii="Nanum Gothic" w:eastAsia="Nanum Gothic" w:hAnsi="Nanum Gothic"/>' + (bold ? '<w:b/>' : '') + '<w:color w:val="' + (color || '000000') + '"/><w:sz w:val="' + Math.round(size * 2) + '"/><w:szCs w:val="' + Math.round(size * 2) + '"/></w:rPr><w:t xml:space="preserve">' + xe(text) + '</w:t></w:r>';
   }
   function lpara(text, size, bold, color, pb) { return '<w:p><w:pPr>' + (pb ? '<w:pageBreakBefore/>' : '') + '<w:spacing w:before="0" w:after="80"/></w:pPr>' + (text ? lrun(text, size, bold, color) : '') + '</w:p>'; }
+  // 줄 높이를 정확히(exact) 잡아 화면·인쇄·워드가 같은 쪽수로 나오게
+  function lp2(text, size, f, o) {
+    o = o || {};
+    return '<w:p><w:pPr>' + (o.pb ? '<w:pageBreakBefore/>' : '') + '<w:spacing w:before="0" w:after="' + Math.round(size * f.after * 20) + '" w:line="' + Math.round(size * f.lh * 20) + '" w:lineRule="exact"/>' + '<w:jc w:val="' + (o.align || 'center') + '"/></w:pPr>' +
+      (text ? lrun(text, size, o.bold, o.color) : '') + (o.sub ? lrun(' ' + o.sub, size, false, o.color) : '') + '</w:p>';
+  }
+  var PAPER = { A4: [11906, 16838], A3: [16838, 23811] };
+  function sectOf(size) { var p = PAPER[size] || PAPER.A4; return '<w:sectPr><w:pgSz w:w="' + p[0] + '" w:h="' + p[1] + '"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr>'; }
   function linesBody(pages) {
-    var SZ = { bm: 10, title: 26, date: 20, group: 22, per: 16, row: 20 }, W = [4500, 3100, 1800], out = '';
+    var out = '';
     var NIL = '<w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/>';
     (pages || []).forEach(function (pg, pi) {
+      var f = pg.fit || { row: 20, title: 30, date: 24, group: 22, per: 16, foot: 14, bm: 9, gap: 10, lh: 1.32, after: 0.2, cols: [10, 8, 5, 7], align: ['left', 'center', 'right', 'left'] };
       var buf = [];
       var flush = function () {
         if (!buf.length) return;
-        out += '<w:tbl><w:tblPr><w:tblW w:w="' + W.reduce(function (a, b) { return a + b; }, 0) + '" w:type="dxa"/><w:tblBorders>' + NIL + '</w:tblBorders><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>' + W.map(function (w) { return '<w:gridCol w:w="' + w + '"/>'; }).join('') + '</w:tblGrid>' +
-          buf.map(function (l) { return '<w:tr>' + l.c.map(function (c, i) { return '<w:tc><w:tcPr><w:tcW w:w="' + W[i] + '" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:spacing w:before="20" w:after="20"/></w:pPr>' + (c ? lrun(c, SZ.row, l.k === 'lunch') : '') + '</w:p></w:tc>'; }).join('') + '</w:tr>'; }).join('') + '</w:tbl>';
+        var W = (f.cols || []).map(function (em) { return Math.round(em * f.row * 20); });
+        var n = buf[0].c.length; W = W.slice(0, n); while (W.length < n) W.push(1800);
+        out += '<w:tbl><w:tblPr><w:tblW w:w="' + W.reduce(function (a, b) { return a + b; }, 0) + '" w:type="dxa"/><w:jc w:val="center"/><w:tblBorders>' + NIL + '</w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:left w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>' + W.map(function (w) { return '<w:gridCol w:w="' + w + '"/>'; }).join('') + '</w:tblGrid>' +
+          buf.map(function (l) { return '<w:tr>' + l.c.map(function (c, i) { return '<w:tc><w:tcPr><w:tcW w:w="' + W[i] + '" w:type="dxa"/></w:tcPr>' + lp2(c, f.row, f, { align: (f.align || [])[i] || 'left', bold: l.k === 'lunch' }) + '</w:tc>'; }).join('') + '</w:tr>'; }).join('') + '</w:tbl>';
         buf = [];
       };
-      out += lpara((pg.fields || {}).날짜 || '', SZ.bm, false, '888888', pi > 0);
+      out += lp2((pg.fields || {}).날짜 || '', f.bm, f, { align: 'left', color: '888888', pb: pi > 0 });
       (pg.lines || []).forEach(function (l) {
-        if (l.k === 'session' || l.k === 'lunch') { buf.push(l); return; }
+        if (l.c) { buf.push(l); return; }
         flush();
-        if (l.k === 'gap') out += lpara('', SZ.row);
-        else if (l.k === 'title') out += lpara(l.t, SZ.title, true);
-        else if (l.k === 'date') out += lpara(l.t, SZ.date, false);
-        else if (l.k === 'group') out += lpara(l.t, SZ.group, true);
-        else if (l.k === 'per') out += lpara(l.t, SZ.per, false, '333333');
+        if (l.k === 'gap') out += '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="' + Math.max(20, Math.round(f.gap * 20)) + '" w:lineRule="exact"/></w:pPr></w:p>';
+        else if (l.k === 'title') out += lp2(l.t, f.title, f, { bold: true });
+        else if (l.k === 'date') out += lp2(l.t, f.date, f, { bold: true, sub: l.sub });
+        else if (l.k === 'group') out += lp2(l.t, f.group, f, { bold: true });
+        else if (l.k === 'per') out += lp2(l.t, f.per, f, { color: '333333' });
+        else if (l.k === 'foot') out += lp2(l.t, f.foot, f, { color: '333333' });
       });
       flush();
     });
@@ -235,7 +247,7 @@ var DF = (function () {
     var JSZip = env.JSZip;
     return JSZip.loadAsync(buf).then(function (zip) {
       return zip.file('word/document.xml').async('string').then(function (xml) {
-        var sect = (/<w:sectPr[\s\S]*?<\/w:sectPr>(?![\s\S]*<w:sectPr)/.exec(xml) || [''])[0];
+        var sect = data.pages && data.pages[0] && data.pages[0].size ? sectOf(data.pages[0].size) : (/<w:sectPr[\s\S]*?<\/w:sectPr>(?![\s\S]*<w:sectPr)/.exec(xml) || [''])[0];
         xml = xml.replace(/<w:body>[\s\S]*<\/w:body>/, function () { return '<w:body>' + linesBody(data.pages) + sect + '</w:body>'; });
         zip.file('word/document.xml', xml);
         return zip.generateAsync({ compression: 'DEFLATE', type: opt.type || (typeof Blob !== 'undefined' && typeof window !== 'undefined' ? 'blob' : 'uint8array'), mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });

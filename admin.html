@@ -816,7 +816,7 @@ function planTab() {
     '<div class="card"><div class="row"><h2 style="margin:0">시간표 출력</h2><span class="sp"></span><div class="seg"><button data-src="plan" class="' + (srcOf(r) === 'plan' ? 'on' : '') + '">계획 기준</button><button data-src="real" class="' + (srcOf(r) === 'real' ? 'on' : '') + '" ' + (hasSes ? '' : 'disabled') + '>편성 결과 기준</button></div></div>' +
     '<p class="small muted">편성 전에는 계획으로 미리 보고, 편성 뒤에는 실제 조(옮긴 사람 반영)로 뽑으세요. 참가자 공개 페이지는 늘 편성 결과로 보여요.</p>' + (srcOf(r) === 'real' ? timeCheckCard(r).replace('<div class="card">', '<div class="panel" style="margin-top:8px">') : '') +
     '<div class="grid g2" style="margin-top:8px">' +
-    [['wall', '벽보용 시간표 (구글 문서·워드)', '75회 예선·본선시간표(종합)처럼 큰 글씨 — 하루 한 장 + 부문별 장, 고쳐 쓰고 붙이기'], ['pub', '공개용 시간표', '참가자·홈페이지 공지용 — 1인 시간 빼고 날짜별 한 장'], ['int', '내부용 시간표', '운영진·심사위원용 — 1인 시간, 추첨 시각, 장소·피아노'], ['det', '세부일정표 (엑셀)', '대기(추첨)·시작·종료·경연시간·쉼시간·인당시간·조출'], ['cal', '달력형 (내부용)', '날짜 칸마다 부문·오전/오후 인원·1인 시간·피아노사용'], ['cals', '달력형 (전달용)', '학교·학원 전달용 — 부문·오전/오후만'], ['xls', '시간표·달력 엑셀', '공개용·내부용·세부일정표·달력 시트를 한 파일로']].map(b => '<button class="scard" data-o="' + b[0] + '" style="min-height:76px"><b>' + b[1] + '</b><div class="small muted" style="font-weight:500">' + b[2] + '</div></button>').join('') +
+    [['wall', '벽보용 시간표 (구글 문서·워드)', 'A3 세로로 붙이는 큰 글씨 — 시각만, 하루 한 장 + 부문별 장'], ['pub', '공개용 시간표', 'A4 세로, 날짜별 한 장 — 인원·1인 시간 포함'], ['int', '내부용 시간표', 'A4 세로 — 인원·1인 시간·추첨 시각·장소·피아노·메모'], ['det', '세부일정표 (엑셀)', '대기(추첨)·시작·종료·경연시간·쉼시간·인당시간·조출'], ['cal', '달력형 (내부용)', '날짜 칸마다 부문·오전/오후 인원·1인 시간·피아노사용'], ['cals', '달력형 (전달용)', '학교·학원 전달용 — 부문·오전/오후만'], ['xls', '시간표·달력 엑셀', '공개용·내부용·세부일정표·달력 시트를 한 파일로']].map(b => '<button class="scard" data-o="' + b[0] + '" style="min-height:76px"><b>' + b[1] + '</b><div class="small muted" style="font-weight:500">' + b[2] + '</div></button>').join('') +
     '</div><div id="ttpv" style="margin-top:12px"></div></div>';
   bindPlan(r, days);
 }
@@ -1100,14 +1100,22 @@ function ttOutput(kind, r, days) {
   if (!tdays.length) { toast('보여 줄 시간표가 없어요. 날짜 계획을 먼저 넣어 주세요.'); return; }
   const st = '<style>' + TT.CSS + '</style>';
   if (kind === 'wall') { ADMX.openBuild('tt_wall', { round: r, sessions: tdays.reduce((a, d) => a.concat(d.ses), []) }); return; }
-  if (kind === 'pub' || kind === 'int') { const html = tdays.map(d => TT.dayDoc(d, info, kind === 'int' ? 'internal' : 'public')).join(''); $('#ttpv').innerHTML = st + '<div class="row"><b>' + (kind === 'int' ? '내부용' : '공개용') + ' 미리보기</b><span class="sp"></span><button class="sm pri" id="ttp">인쇄</button></div>' + html; $('#ttp').addEventListener('click', () => App.printHTML(st + '<div class="pr">' + html + '</div>')); }
+  // 공개용·내부용: A4 세로, 하루 한 장 — 제목·날짜 크게 가운데, 글씨 크기는 쪽을 알맞게 채우도록
+  if (kind === 'pub' || kind === 'int') {
+    const pages = TT.printPages(tdays, info, kind === 'int' ? 'ops' : 'public');
+    $('#ttpv').innerHTML = '<div class="row"><b>' + (kind === 'int' ? '내부용' : '공개용') + ' 미리보기</b> <span class="small muted">A4 세로 · ' + pages.length + '장</span><span class="sp"></span><button class="sm pri" id="ttp">인쇄</button></div><div style="background:#8a8590;padding:12px;border-radius:10px;max-height:70vh;overflow:auto">' + TT.pagesHTML(pages, { preview: true }) + '</div>';
+    $('#ttp').addEventListener('click', () => App.printHTML(TT.pagesHTML(pages)));
+  }
   if (kind === 'det') App.writeXlsx([{ name: '세부일정표', rows: [[info.title + ' ' + rname(r) + ' 세부일정표']].concat(TT.detailRows(tdays, info)) }], rname(r) + '_세부일정표_' + App.today() + '.xlsx');
   if (kind === 'cal' || kind === 'cals') {
     // 달력은 두 라운드를 같이 보여 줌
     const both = ['R1', 'R2'].reduce((a, rr) => a.concat(ttData(rr, planDays(rr)).days), []);
     const html = TT.calendar(both, info, kind === 'cal' ? 'internal' : 'share');
     $('#ttpv').innerHTML = st + '<div class="row"><b>달력형 ' + (kind === 'cal' ? '(내부용)' : '(전달용)') + ' 미리보기</b><span class="sp"></span><button class="sm pri" id="ttp">인쇄 (가로)</button></div><div class="scroll">' + html + '</div>';
-    $('#ttp').addEventListener('click', () => App.printHTML(st + '<style>@page{size:A4 landscape;margin:20mm}</style><div class="pr">' + html + '</div>'));
+    // A4 세로, 주 수에 맞춰 칸 높이를 늘려 쪽을 채움
+    const wk = Math.max(1, (html.match(/<tr>/g) || []).length - 1), note = info.calendarNote ? 14 : 0;
+    $('#ttp').textContent = '인쇄 (A4 세로)';
+    $('#ttp').addEventListener('click', () => App.printHTML(st + '<style>@page{size:A4 portrait;margin:20mm}@media print{.ttc td{height:' + Math.floor((257 - 26 - 9 - note) / wk) + 'mm}.ttc th,.ttc td{font-size:9.5pt}.ttc .tm,.ttc .pn,.ttc .nt{font-size:8.5pt}.ttc-t{font-size:20pt;margin-bottom:5mm}}</style><div class="pr">' + html + '</div>'));
   }
   if (kind === 'xls') {
     const both = ['R1', 'R2'].reduce((a, rr) => a.concat(ttData(rr, planDays(rr)).days), []);

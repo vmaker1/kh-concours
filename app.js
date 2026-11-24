@@ -456,7 +456,9 @@ var App = (function () {
       if (!mh || h / mh >= 1.15) return null;               // 원래 여러 장인 내용은 그대로 흘려 보냄
       return { h: mh - 2, zoom: h > mh + 1 ? (mh / h * 0.99).toFixed(4) : '' };   // 한 장에 딱 맞춤(넘치면 살짝 줄임)
     });
-    var css = '<style>@media print { @page { size: A4; margin: 0; } }' +
+    // 용지 크기는 양식(구역) 그대로 — 벽보용은 A3
+    var s0 = el.querySelector('section.docx'), pw = s0 && s0.style.width, ph = s0 && s0.style.minHeight;
+    var css = '<style>@media print { @page { size: ' + (pw && ph ? pw + ' ' + ph : 'A4') + '; margin: 0; } }' +
       '#print-root .docx-wrapper { background: none !important; padding: 0 !important; display: block !important; }' +
       '#print-root section.docx { box-shadow: none !important; margin: 0 auto !important; min-height: 0 !important; break-after: page; page-break-after: always; overflow: hidden; }' +
       '#print-root section.docx:last-of-type { break-after: auto; page-break-after: auto; }</style>';

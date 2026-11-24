@@ -235,3 +235,7 @@ input.dn.bad, .drt input.bad { border-color: var(--bad); background: #fff5f5; co
 @page land { size: A4 landscape; margin: 20mm; }
 .shp th, .shp td { text-align: left; }
 .shp tbody tr:hover td { background: none; }
+/* 워드 미리보기(docx-preview) 안에는 앱의 표 모양(칸 여백·밑줄·폭)이 들어가지 않게 — 워드 그대로 */
+section.docx table { width: auto; font-size: inherit; background: none; }
+section.docx th, section.docx td { padding: 0 5.4pt; border-bottom: 0; text-align: inherit; vertical-align: top; background: none; }
+section.docx tbody tr:hover td { background: none; }

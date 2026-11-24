@@ -9,9 +9,9 @@ var FM = (function () {
   var WD = ['일', '월', '화', '수', '목', '금', '토'];
 
   var FORMS = {
-    tt_public: { name: '시간표 (공개용)', type: 'doc', file: 'tt_public.docx', cat: '시간표', desc: '날짜마다 한 장. 예선은 인원 없이' },
-    tt_ops: { name: '시간표 (운영·심사위원용)', type: 'doc', file: 'tt_ops.docx', cat: '시간표', desc: '인원·추첨시각·메모 포함' },
-    tt_wall: { name: '시간표 (벽보용)', type: 'doc', file: 'tt_public.docx', cat: '시간표', desc: '75회 예선·본선시간표(종합) 모양 — 큰 글씨, 하루 한 장 + 부문별 장', lines: true },
+    tt_public: { name: '시간표 (공개용)', type: 'doc', file: 'tt_public.docx', cat: '시간표', desc: 'A4 세로, 날짜마다 한 장 — 인원·1인 시간 포함', lines: true },
+    tt_ops: { name: '시간표 (운영·심사위원용)', type: 'doc', file: 'tt_ops.docx', cat: '시간표', desc: 'A4 세로 — 인원·1인 시간·추첨 시각·장소·메모', lines: true },
+    tt_wall: { name: '시간표 (벽보용)', type: 'doc', file: 'tt_public.docx', cat: '시간표', desc: 'A3 세로로 붙이는 큰 글씨 — 시각만(인원·1인 시간 없이), 하루 한 장 + 부문별 장', lines: true },
     att_group: { name: '조별 출석부', type: 'sheet', file: 'att_group.xlsx', cat: '현장', desc: '조마다 한 탭, 조별 순서대로' },
     att_perf: { name: '현장 경연순서 출석부', type: 'sheet', file: 'att_perf.xlsx', cat: '현장', desc: '추첨 후 경연순번 순서' },
     pieces: { name: '곡목 알림표', type: 'sheet', file: 'pieces.xlsx', cat: '현장', desc: '경연순번과 곡목 (이름 없음)' },
@@ -289,34 +289,19 @@ var FM = (function () {
   }
 
   /* ========== 시간표 (문서, 날짜마다 한 장) ========== */
+  // 시간표 — 한 장 = 줄 목록 + 용지(A4/A3) + 글씨 크기(쪽을 알맞게 채우도록 계산). 구글 문서는 Apps Script가 바로 만들고, 워드는 DF.linesDocx
+  function ttInfo(cfg) { return { title: title(cfg), r1Name: cfg.r1Name, r2Name: cfg.r2Name, drawLeadMin: cfg.drawLeadMin }; }
+  function ttOut(pages) { return { pages: pages.map(function (p) { return { fields: { 날짜: p.bookmark }, lines: p.lines, size: p.size, fit: p.fit }; }) }; }
   function timetable(L, opt, ops) {
-    var cfg = L.cfg || {}, list = sesOf(L, { round: opt.round, dates: opt.dates });
-    if (!T) throw new Error('시간표 모듈(TT)이 없습니다');
-    var days = T.buildDays(list, L.plan || []);
-    var pages = days.map(function (d) {
-      var r2 = d.round === 'R2', rows = [], prevG = null;
-      d.rows.forEach(function (r) {
-        if (r.type === 'lunch') { rows.push({ 부문: '점심시간', 조: '', 시간: r.start + ' ~ ' + r.end, 인원: '', 추첨: '', 비고: '' }); prevG = null; return; }
-        if (r.type !== 'session') return;
-        var g = split(r.groupKey), multi = d.ses.filter(function (x) { return x.groupKey === r.groupKey; }).length > 1;
-        var showCount = ops || (r2 ? cfg.pubCountR2 !== 'N' : cfg.pubCountR1 === 'Y');
-        rows.push({ 부문: prevG === r.groupKey ? '' : g.div, 조: g.cat + (r2 && !multi ? '' : ' ' + (r.label || r.no + '조')), 시간: r.startTime + ' ~ ' + r.endTime,
-          인원: showCount ? r.count + '명' : '', 추첨: r.drawTime, 비고: !ops && showCount ? r.count + '명' : '' });
-        prevG = r.groupKey;
-      });
-      return { fields: { 라운드: rname(cfg, d.round), 날짜: md(d.date) + ' (' + wd(d.date) + ')', 시작: d.start, 종료: d.end, 장소: d.venue || s(cfg.venueShort),
-        안내: '※ 각 조 경연 시작 ' + (cfg.drawLeadMin || 30) + '분 전에 연주 순서를 추첨합니다. 추첨 시각까지 대기실에 도착해 주세요. 경연 시작 시간은 진행 상황에 따라 바뀔 수 있습니다.',
-        메모: [d.piano ? '피아노 사용' : '', d.note].filter(Boolean).join(' · ') }, rows: rows };
-    });
-    return { pages: pages };
-  }
-
-  // 벽보용: 한 장 = 줄 목록 (구글 문서는 Apps Script가 바로 만들고, 워드는 DF.linesDocx)
-  function timetableWall(L, opt) {
-    if (!T || !T.wallPages) throw new Error('시간표 모듈(TT)이 없습니다');
+    if (!T || !T.printPages) throw new Error('시간표 모듈(TT)이 없습니다');
     var cfg = L.cfg || {}, list = opt.sessions || sesOf(L, { round: opt.round, dates: opt.dates });
-    var pages = T.wallPages(T.buildDays(list, L.plan || []), { title: title(cfg), r1Name: cfg.r1Name, r2Name: cfg.r2Name }, { split: opt.split !== false });
-    return { pages: pages.map(function (p) { return { fields: { 날짜: p.bookmark }, lines: p.lines }; }) };
+    return ttOut(T.printPages(T.buildDays(list, L.plan || []), ttInfo(cfg), ops ? 'ops' : 'public'));
+  }
+  // 벽보용: A3 세로, 시각만 — 하루 한 장 + (부문이 둘 이상인 날) 부문별 장
+  function timetableWall(L, opt) {
+    if (!T || !T.printPages) throw new Error('시간표 모듈(TT)이 없습니다');
+    var cfg = L.cfg || {}, list = opt.sessions || sesOf(L, { round: opt.round, dates: opt.dates });
+    return ttOut(T.printPages(T.buildDays(list, L.plan || []), ttInfo(cfg), 'wall', { split: opt.split !== false }));
   }
 
   /* ========== 공문·확인서 ========== */
