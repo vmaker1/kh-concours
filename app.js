@@ -194,6 +194,35 @@ var App = (function () {
       $('#pw', m.el).addEventListener('click', function () { endPractice(true); });
     });
   }
+  /* ---------- 시각 입력: 브라우저 시계 칸(오전/오후·시계 아이콘 때문에 잘려 보임) 대신 24시 'HH:MM' 글자 칸 ----------
+   * 화면에 생기는 input[type=time]을 모두 글자 칸(.tm)으로 바꾸고, 다 쓰면(change) '930' '1330' '13시30분' '오후 1:30'도 13:30처럼 맞춰 줌 */
+  function normT(v) {
+    v = String(v || '').trim(); if (!v) return '';
+    var pm = /오후|pm/i.test(v), am = /오전|am/i.test(v), h, m;
+    var x = v.replace(/오전|오후|am|pm|\s/gi, '');
+    var a = /^(\d{1,2})\s*[:시.]\s*(\d{1,2})?\s*분?$/.exec(x);
+    if (a) { h = +a[1]; m = +(a[2] || 0); }
+    else if (/^\d{1,4}$/.test(x)) { if (x.length <= 2) { h = +x; m = 0; } else { h = +x.slice(0, x.length - 2); m = +x.slice(-2); } }
+    else return v;
+    if (pm && h < 12) h += 12; if (am && h === 12) h = 0;
+    if (h > 23 || m > 59) return v;
+    return ('0' + h).slice(-2) + ':' + ('0' + m).slice(-2);
+  }
+  function fixTimeInputs() {
+    var els = document.querySelectorAll('input[type=time]');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i], v = el.value;
+      el.type = 'text'; el.classList.add('tm'); el.setAttribute('inputmode', 'numeric'); el.setAttribute('maxlength', '8'); el.setAttribute('autocomplete', 'off');
+      if (!el.placeholder) el.placeholder = '09:50';
+      el.value = v;
+    }
+  }
+  try {
+    new MutationObserver(fixTimeInputs).observe(document.documentElement, { childList: true, subtree: true });
+    // 다른 처리보다 먼저(capture) 시각을 맞춰서, 저장하는 쪽은 늘 'HH:MM'을 받게
+    document.addEventListener('change', function (e) { var t = e.target; if (t && t.classList && t.classList.contains('tm')) { var n = normT(t.value); if (n !== t.value) t.value = n; t.classList.toggle('bad', !!t.value && !/^\d{2}:\d{2}$/.test(t.value)); } }, true);
+  } catch (e) { }
+
   // 운영 화면 로그인 아래에 붙이는 '연습 모드로 열기' 안내 (운영 주소에서만)
   function practiceLink() {
     if (DEMO) return '';
@@ -426,7 +455,7 @@ var App = (function () {
 
   return {
     brandHTML: brandHTML,
-    DEMO: DEMO, PRACTICE: PRACTICE, practiceLink: practiceLink, endPractice: endPractice, api: api, getToken: getToken, setToken: setToken, resetDemo: resetDemo, store: store,
+    normT: normT, DEMO: DEMO, PRACTICE: PRACTICE, practiceLink: practiceLink, endPractice: endPractice, api: api, getToken: getToken, setToken: setToken, resetDemo: resetDemo, store: store,
     $: $, $$: $$, esc: esc, toast: toast, modal: modal, confirmBox: confirmBox, busy: busy,
     fmtDate: fmtDate, fmtBirth: fmtBirth, phone4: phone4, today: today, applyTheme: applyTheme, demoBar: demoBar,
     loginView: loginView, readWorkbook: readWorkbook, findHeaderRow: findHeaderRow, autoMap: autoMap, piecesFrom: piecesFrom, hasPieceColumns: hasPieceColumns, piecesHTML: piecesHTML,

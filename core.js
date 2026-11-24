@@ -1363,6 +1363,11 @@ var KC = (function () {
       } catch (e) { out.push({ groupKey: gk, ok: false, msg: e.message }); }
       db.invalidate();
     });
+    // 대상은 있는데 계획에 아예 없는 부문도 알려 줌 (조용히 빠지지 않게)
+    if (!only) allGroupKeys(db).forEach(function (gk) {
+      if (byG[gk]) return; var need = eligibleOf(db, round, gk).length;
+      if (need) out.push({ groupKey: gk, ok: false, msg: '시간표 계획에 없어요 (대상 ' + need + '명)' });
+    });
     db.log('admin', 'applyPlan', round + ' ' + out.filter(function (x) { return x.ok; }).length + '개 부문');
     return out;
   });

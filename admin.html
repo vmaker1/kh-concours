@@ -585,9 +585,17 @@ function sched() {
   view().innerHTML = '<div class="row" style="margin-bottom:14px"><div class="seg"><button data-r="R1" class="' + (r === 'R1' ? 'on' : '') + '">' + esc(rname('R1')) + '</button><button data-r="R2" class="' + (r === 'R2' ? 'on' : '') + '">' + esc(rname('R2')) + '</button></div><span class="sp"></span>' +
     '<div class="flagrow" style="border:0;padding:0"><b>참가자 조회에 ' + esc(rname(r)) + ' 일정 공개</b><label class="switch"><input type="checkbox" id="pub" ' + (D.cfg[pubKey] === 'Y' ? 'checked' : '') + '><span></span></label></div></div>' +
     '<div class="card"><h2>부문별 편성</h2><p class="small muted">' + (r === 'R1' ? '보통은 <b>시간표</b> 탭에서 계획을 짜고 \'계획대로 조편성\'을 누르면 돼요. 여기서는 한 부문만 빠르게 다시 편성하거나 사람을 옮길 때 써요. 입금 확인된 참가자만, 이름 가나다순으로 순번을 매겨요.' : '예선 커트라인으로 본선 진출이 확정된 참가자가 대상이에요.') + '</p>' +
-    '<div class="scroll"><table><thead><tr><th>부문</th><th class="n">대상</th><th class="n">편성</th><th>조</th><th></th></tr></thead><tbody>' +
-    groups.map(g => '<tr><td><b>' + esc(GL(g.k)) + '</b></td><td class="n">' + g.elig + '</td><td class="n">' + (g.placed || '') + (g.placed && g.placed !== g.elig ? ' <span class="badge warn">차이 ' + (g.elig - g.placed) + '</span>' : '') + '</td><td class="small">' + g.gs.map(s => esc(fmtDate(s.date)) + ' ' + esc(s.startTime) + ' ' + esc(s.label) + '(' + (cnt[s.sessionId] || 0) + ')').join(' · ') + '</td>' +
-      '<td><button class="sm ' + (g.gs.length ? '' : 'pri') + '" data-gen="' + esc(g.k) + '" ' + (g.elig ? '' : 'disabled') + '>' + (g.gs.length ? '다시 편성' : '편성하기') + '</button></td></tr>').join('') +
+    '<div class="scroll"><table class="gtbl"><thead><tr><th>부문</th><th class="n">대상</th><th class="n">편성</th><th>일자</th><th>조 (인원) 시작</th><th></th></tr></thead><tbody>' +
+    groups.map(g => {
+      // 날짜는 한 번만, 그날 조를 '1조(9) 09:50 · 2조(9) 10:20'처럼 — 이틀에 걸친 부문은 날짜마다 한 줄
+      const by = {}; g.gs.forEach(x => (by[x.date] = by[x.date] || []).push(x));
+      const ds = Object.keys(by).sort(), rs = ds.length > 1 ? ' rowspan="' + ds.length + '"' : '';
+      const head = '<td' + rs + '><b>' + esc(GL(g.k)) + '</b></td><td class="n"' + rs + '>' + g.elig + '</td><td class="n"' + rs + '>' + (g.placed || '') + (g.placed && g.placed !== g.elig ? ' <span class="badge warn">차이 ' + (g.elig - g.placed) + '</span>' : '') + '</td>';
+      const btn = '<td' + rs + '><button class="sm ' + (g.gs.length ? '' : 'pri') + '" data-gen="' + esc(g.k) + '" ' + (g.elig ? '' : 'disabled') + '>' + (g.gs.length ? '다시 편성' : '편성하기') + '</button></td>';
+      if (!ds.length) return '<tr>' + head + '<td colspan="2" class="small">' + whyNotPlaced(g, r) + '</td>' + btn + '</tr>';
+      return ds.map((d, i) => '<tr>' + (i ? '' : head) + '<td style="white-space:nowrap">' + esc(fmtDate(d)) + '</td><td class="small">' +
+        by[d].map(x => '<b>' + esc(x.label) + '</b>(' + (cnt[x.sessionId] || 0) + ') ' + esc(x.startTime)).join(' · ') + '</td>' + (i ? '' : btn) + '</tr>').join('');
+    }).join('') +
     '</tbody></table></div></div>' + timeCheckCard(r) +
     '<div class="card"><div class="row"><h2 style="margin:0">' + esc(rname(r)) + ' 전체 시간표</h2><span class="sp"></span><button id="xs">시간표 엑셀</button><button id="xn">공지용 조별 명단 엑셀</button></div>' +
     (ses.length ? '<div class="scroll" style="margin-top:12px"><table><thead><tr><th>일자</th><th>부문</th><th>조</th><th class="n">인원</th><th>추첨</th><th>시작</th><th>예상 종료</th><th>장소</th><th></th></tr></thead><tbody>' +
@@ -609,34 +617,61 @@ function sched() {
     App.writeXlsx(sheets, rname(r) + '_조별명단_' + App.today() + '.xlsx');
   });
 }
+// 아직 편성 안 된 부문: 왜 빠졌는지 (계획에 없음 / 계획 인원과 대상이 다름)
+function whyNotPlaced(g, r) {
+  if (!g.elig) return '<span class="muted">대상 없음</span>';
+  const pl = KC.planAll(D.cfg, planDays(r)).totals[g.k] || 0;
+  if (!pl) return '<span class="badge warn">시간표 계획에 없어요</span> <span class="muted">시간표 탭에서 넣거나 오른쪽 \'편성하기\'로 바로 편성</span>';
+  if (pl !== g.elig) return '<span class="badge warn">계획 ' + pl + '명 · 대상 ' + g.elig + '명</span> <span class="muted">인원이 달라 \'계획대로 조편성\'에서 빠졌어요 — 시간표에서 인원을 맞추거나 \'편성하기\'</span>';
+  return '<span class="muted">계획은 있어요 — 시간표 탭의 \'계획대로 조편성\'이나 \'편성하기\'</span>';
+}
+// 한 부문 편성: 시간표 계획이 있으면 그 날짜·시각·인원으로 채우고, 빠르게 채우기는 값을 바꾸면 바로 줄이 다시 만들어짐
 function genDialog(g) {
-  const per = +D.cfg.perSec || 200, size = +D.cfg.groupSize || 15, n = g.elig, k = Math.max(1, Math.ceil(n / size));
-  // 다시 편성할 때는 기존 조의 날짜·시각만 채우고 인원은 비워 둠 → 그 사이 늘어난 인원까지 고르게 나눔
-  const lines = g.gs.length ? g.gs.map(s => s.date + ' ' + s.startTime).join('\n') : '';
+  const df = gDefault(g.k, ROUND), n = g.elig;
+  const planSes = []; KC.planAll(D.cfg, planDays(ROUND)).days.forEach(x => x.items.forEach(i => { if (i.type === 'session' && i.groupKey === g.k) planSes.push({ date: x.day.date, start: i.start, n: i.n, day: x.day }); }));
+  const planBlock = planSes.length ? (planSes[0].day.blocks || []).find(b => b.groupKey === g.k) : null;
+  const per = +(planBlock && KC.parseSec ? KC.parseSec(planBlock.perSec) : 0) || df.per, size = +(planBlock && planBlock.size) || df.size;
+  const k = Math.max(1, Math.ceil(n / size));
+  const planLines = planSes.map(x => x.date + ' ' + x.start + ' ' + x.n).join('\n');
+  // 다시 편성: 기존 조의 날짜·시각(인원은 비움 → 그 사이 늘어난 인원까지 고르게) / 새로 편성: 계획이 있으면 계획대로
+  const lines = g.gs.length ? g.gs.map(x => x.date + ' ' + x.startTime).join('\n') : planLines;
   const passY2 = new Set(D.entries.filter(e => e.round === 'R1' && e.pass === 'Y').map(e => e.pid));
   const targets = D.participants.filter(p => p.groupKey === g.k && isActive(p) && (ROUND === 'R1' ? isPaid(p) : passY2.has(p.id)));
   const farN = targets.filter(p => KC.isFar(D.cfg, p)).length, noRegion = targets.filter(p => !p.region).length;
-  const m = modal('<h2>' + esc(GL(g.k)) + ' ' + esc(rname(ROUND)) + ' 편성</h2><p>대상 <b>' + n + '명</b> · 조당 ' + size + '명 기준이면 <b>' + k + '개 조</b>예요.</p>' +
+  const pd0 = planSes[0] ? planSes[0].day : null;
+  const m = modal('<h2>' + esc(GL(g.k)) + ' ' + esc(rname(ROUND)) + ' 편성</h2><p>대상 <b>' + n + '명</b> · 조당 ' + size + '명 기준이면 <b>' + k + '개 조</b>예요.' + (planSes.length ? ' <span class="badge ok">시간표 계획 ' + planSes.length + '개 조</span>' : '') + '</p>' +
     '<div class="panel" style="margin-bottom:12px"><label class="inline"><input type="checkbox" id="far" checked> <b>지방 참가자 ' + farN + '명은 오후 조에</b> — 그날 마지막 조는 피해서</label>' +
     '<p class="small muted" style="margin:6px 0 0">지방 = ' + esc(D.cfg.farRegions) + ' (설정에서 바꿀 수 있어요). ' + esc(D.cfg.afternoonFrom || '12:00') + ' 이후 시작하는 조를 오후 조로 보고, 다른 부문까지 합쳐 그날 가장 늦게 시작하는 조는 피해요. 오후 조가 차면 마지막 조 → 늦은 오전 조 순으로 넣고 알려 드려요.' + (noRegion ? ' 주소가 없어 지역을 모르는 참가자 ' + noRegion + '명은 일반 배치돼요.' : '') + '</p></div>' +
     '<div class="grid g2" style="gap:10px"><div><label class="f">1인 배당 시간(초)</label><input id="ps" inputmode="numeric" value="' + per + '"></div><div><label class="f">순번 매기는 방식</label><select id="od"><option value="name">이름 가나다순</option><option value="applied">신청 순</option><option value="random">무작위</option></select></div></div>' +
-    '<div class="panel" style="margin:12px 0"><div class="row"><label class="f" style="margin:0">빠르게 채우기</label><input type="date" id="qd" style="width:160px" value="' + esc(g.gs[0] ? g.gs[0].date : '') + '"><input type="time" id="qt" style="width:120px" value="09:00"><input id="qk" inputmode="numeric" style="width:80px" value="' + k + '" aria-label="조 수"><span class="small">개 조</span><button class="sm" id="qf">줄 만들기</button></div><p class="small muted" style="margin:6px 0 0">조마다 경연 시간 + 10분 쉬는 시간을 두고 이어서 시작 시각을 만들어요. 점심은 직접 고쳐 주세요.</p></div>' +
-    '<label class="f" for="sl">조마다 한 줄: 일자 시작시각 [인원] [장소]</label><textarea id="sl" rows="6" placeholder="2027-03-24 09:00\n2027-03-24 10:20\n2027-03-24 13:00 18">' + esc(lines) + '</textarea>' +
+    '<div class="panel" style="margin:12px 0"><div class="row" style="flex-wrap:wrap;gap:6px"><label class="f" style="margin:0">빠르게 채우기</label><input type="date" id="qd" style="width:160px" value="' + esc(g.gs[0] ? g.gs[0].date : planSes[0] ? planSes[0].date : '') + '"><input type="time" id="qt" style="width:120px" value="' + esc(pd0 ? pd0.start : '09:50') + '"><input id="qk" inputmode="numeric" style="width:70px" value="' + k + '" aria-label="조 수"><span class="small">개 조</span><button class="sm" id="qf">줄 만들기</button>' +
+      (planSes.length ? '<span class="sp"></span><button class="sm" id="qp">계획대로 채우기</button>' : '') + '</div>' +
+      '<p class="small muted" style="margin:6px 0 0">날짜·시작·조 수를 바꾸면 아래 줄이 바로 다시 만들어져요. 시간표 계획과 같은 규칙(점심·' + esc(pd0 && +pd0.restEvery ? pd0.restEvery + '조마다 ' + (pd0.restMin || 10) + '분 쉬기' : '조 사이 ' + (D.cfg.sessionGap || 10) + '분') + ')으로 시각을 계산해요.</p></div>' +
+    '<label class="f" for="sl">조마다 한 줄: 일자 시작시각 [인원] [장소]</label><textarea id="sl" rows="6" placeholder="빠르게 채우기에서 날짜를 고르면 여기 자동으로 채워져요.&#10;직접 쓸 때 예) 2026-12-10 09:50 9">' + esc(lines) + '</textarea>' +
     '<p class="small muted">인원을 비워 두면 남은 인원을 고르게 나눠요. 다시 편성하면 이 부문의 기존 조와 추첨번호·출석이 지워집니다.</p>' +
     '<div class="row end"><button data-close>취소</button><button class="pri" id="go">편성 실행</button></div>');
-  $('#qf', m.el).addEventListener('click', () => {
-    const d = $('#qd', m.el).value, kk = Math.max(1, +$('#qk', m.el).value || 1), ps = +$('#ps', m.el).value || per;
-    if (!d) { toast('날짜를 골라 주세요'); return; }
-    let t = KC.toMin($('#qt', m.el).value); const base = Math.floor(n / kk), ex = n % kk, out = [];
-    for (let i = 0; i < kk; i++) { const c = base + (i < ex ? 1 : 0); out.push(d + ' ' + KC.fromMin(t)); t += Math.ceil(c * ps / 600) * 10 + 10; }
-    $('#sl', m.el).value = out.join('\n');
-  });
+  // 빠르게 채우기 → 시간표와 같은 엔진(planDay)으로 조별 시작 시각 계산
+  const quick = () => {
+    const d = $('#qd', m.el).value; if (!d) return false;
+    const kk = Math.max(1, +$('#qk', m.el).value || 1), ps = +$('#ps', m.el).value || per;
+    const pd = planDays(ROUND).find(x => x.date === d) || pd0 || {};
+    const sizes = KC.splitSizes(n, Math.ceil(n / kk));
+    const day = { date: d, start: $('#qt', m.el).value || '09:50', amEnd: pd.amEnd || D.cfg.amEnd, pmStart: pd.pmStart || D.cfg.pmStart, lunchMin: pd.lunchMin || '', gap: pd.gap != null ? pd.gap : '', restEvery: pd.restEvery || '', restMin: pd.restMin || '', blocks: [{ groupKey: g.k, count: n, perSec: ps, size: Math.ceil(n / kk), sizes: sizes.join(',') }] };
+    const res = KC.planDay(D.cfg, day), out = res.items.filter(i => i.type === 'session').map(i => d + ' ' + i.start + ' ' + i.n);
+    $('#sl', m.el).value = out.join('\n'); return true;
+  };
+  ['#qd', '#qt', '#qk', '#ps'].forEach(id => $(id, m.el).addEventListener('change', () => { if ($('#qd', m.el).value) quick(); }));
+  $('#qf', m.el).addEventListener('click', () => { if (!quick()) toast('날짜를 먼저 골라 주세요', 'bad'); });
+  const qp = $('#qp', m.el); if (qp) qp.addEventListener('click', () => { $('#sl', m.el).value = planLines; });
   $('#go', m.el).addEventListener('click', e => {
+    if (!$('#sl', m.el).value.trim() && !quick()) { toast('빠르게 채우기에서 날짜를 고르거나, 조마다 한 줄씩 일자와 시작 시각을 넣어 주세요', 'bad'); return; }
     const slots = $('#sl', m.el).value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
       const t = l.split(/\s+/); const o = { date: t[0], startTime: t[1] || '' };
       if (t[2] && /^\d+$/.test(t[2])) { o.count = +t[2]; if (t[3]) o.venue = t.slice(3).join(' '); } else if (t[2]) o.venue = t.slice(2).join(' ');
       return o;
     });
+    // 인원을 적은 줄의 합이 대상과 다르면 (그 사이 대상이 바뀐 경우) 인원은 비우고 고르게 나눔
+    const fixed = slots.reduce((a, x) => a + (x.count || 0), 0);
+    if (slots.every(x => x.count) && fixed !== n) slots.forEach(x => { delete x.count; });
     const run = force => { busy(e.target, true); call('generateSessions', { round: ROUND, groupKey: g.k, slots, perSec: $('#ps', m.el).value, order: $('#od', m.el).value, farAfternoon: $('#far', m.el).checked, force }).then(r => {
       m.close(); toast(r.people + '명을 ' + r.sessions + '개 조로 편성했어요', 'ok');
       const f = r.far || {};
@@ -950,7 +985,7 @@ function bindPlan(r, days) {
     $$('[data-bd]').forEach(b => b.addEventListener('click', () => { const j = bj(b.dataset.bd), a = d.blocks; [a[j + 1], a[j]] = [a[j], a[j + 1]]; rerender(); }));
     $$('[data-bx]').forEach(b => b.addEventListener('click', () => { d.blocks.splice(bj(b.dataset.bx), 1); rerender(); }));
     $$('#ped [data-d][data-f]').forEach(inp => {
-      const ev = inp.tagName === 'SELECT' || inp.type === 'checkbox' || inp.type === 'date' ? 'change' : 'input';
+      const ev = inp.tagName === 'SELECT' || inp.type === 'checkbox' || inp.type === 'date' || inp.type === 'time' || inp.classList.contains('tm') ? 'change' : 'input';
       inp.addEventListener(ev, () => {
         const f = inp.dataset.f, v = inp.type === 'checkbox' ? inp.checked : inp.value;
         if (inp.dataset.b != null) {

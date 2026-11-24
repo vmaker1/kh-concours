@@ -204,3 +204,7 @@ tbody tr:hover td { background: #fbf8f9; }
   .fade { animation: fade .25s ease-out; }
   @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 }
+
+/* 24시 시각 칸 (브라우저 시계 칸 대신) */
+input.tm { font-variant-numeric: tabular-nums; letter-spacing: .02em; min-width: 72px; }
+input.tm.bad { border-color: var(--bad); background: #fff5f5; }
