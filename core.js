@@ -22,6 +22,8 @@ var KC = (function () {
     Scores: ['scoreId', 'round', 'pid', 'sessionId', 'judgeId', 'value', 'comment', 'updatedAt'],
     Submissions: ['subId', 'sessionId', 'judgeId', 'submittedAt'],
     Logs: ['time', 'actor', 'action', 'detail'],
+    // 수정 기록: 누가 언제 무엇을 어떻게 바꿨는지 (곡목은 바뀌기 전·후 그대로, 연락처·주소처럼 개인 정보는 '바뀜'만)
+    History: ['hid', 'time', 'actor', 'pid', 'round', 'field', 'before', 'after', 'note'],
     // 시간표 설계: 날짜(경연일) 하루가 한 줄. blocks = 그날 들어갈 부문 목록(JSON)
     Plan: ['dayId', 'round', 'date', 'start', 'amEnd', 'pmStart', 'lunchMin', 'gap', 'breaks', 'venue', 'piano', 'note', 'blocks', 'endBy', 'restEvery', 'restMin'],
     // 심사위원·진행요원 — 본인이 링크로 들어와 정보 입력. 주민번호·계좌번호는 브라우저에서 암호화된 값(E1.…)만 저장
@@ -45,7 +47,7 @@ var KC = (function () {
   var KEYS = {
     Config: 'key', Groups: 'groupKey', Participants: 'id', Sessions: 'sessionId', Entries: 'entryId',
     Judges: 'judgeId', Scores: 'scoreId', Submissions: 'subId', Plan: 'dayId',
-    Staff: 'staffId', Work: 'workId', Prizes: 'pid', Requests: 'reqId', Docs: 'docId', Seasons: 'no', Archive: 'aid'
+    Staff: 'staffId', Work: 'workId', Prizes: 'pid', Requests: 'reqId', Docs: 'docId', Seasons: 'no', Archive: 'aid', History: 'hid'
   };
 
   var DEFAULT_CONFIG = {
@@ -589,6 +591,43 @@ var KC = (function () {
 
   function groupLabel(groupKey) { var p = s(groupKey).split('|'); return p[0] + ' ' + (p[1] || ''); }
 
+  /* ---------------- 수정 기록 ---------------- */
+  var FIELD_LABEL = { name: '이름', birth: '생년월일', gender: '성별', division: '지원 부문', category: '지원 구분', school: '학교', grade: '학년', phone: '휴대폰', guardianName: '보호자 이름', guardianPhone: '보호자 휴대폰', email: '이메일', zip: '우편번호', address: '주소', payStatus: '결제 상태', payMemo: '입금 메모', status: '상태', teacher: '사사 선생님', note: '비고', pieces: '곡목', groupKey: '편성 부문' };
+  var PRIVATE_FIELDS = ['birth', 'phone', 'guardianPhone', 'email', 'zip', 'address'];   // 값은 남기지 않고 '바뀜'만
+  // 곡목이 어떻게 바뀌었는지 한마디로
+  function pieceChangeKind(before, after) {
+    var key = function (x) { return (s(x.composer) + '|' + s(x.title)).replace(/\s+/g, '').toLowerCase(); };
+    var a = before.map(key), b = after.map(key);
+    if (a.join('/') === b.join('/')) return before.map(function (x) { return s(x.kind) + s(x.country); }).join('/') === after.map(function (x) { return s(x.kind) + s(x.country); }).join('/') ? '' : '구분 고침';
+    if (a.length === b.length && a.slice().sort().join('/') === b.slice().sort().join('/')) return '순서 변경';
+    if (b.length > a.length) return '곡 추가';
+    if (b.length < a.length) return '곡 삭제';
+    return '곡 변경';
+  }
+  function addHistory(db, actor, pid, rows) {
+    rows = (rows || []).filter(Boolean); if (!rows.length) return 0;
+    var now = db.store.now(), base = String(Date.now ? Date.now() : now).slice(-9);
+    db.append('History', rows.map(function (r, i) { return { hid: 'H' + base + '-' + i + '-' + randToken().slice(0, 4), time: now, actor: s(actor), pid: s(pid), round: s(r.round), field: s(r.field), before: s(r.before).slice(0, 500), after: s(r.after).slice(0, 500), note: s(r.note).slice(0, 200) }; }));
+    return rows.length;
+  }
+  // 참가자 정보 비교 → 바뀐 항목 (곡목은 라운드별로)
+  function diffParticipant(old, neu) {
+    var out = [];
+    Object.keys(FIELD_LABEL).forEach(function (k) {
+      if (k === 'pieces' || k === 'groupKey' || !(k in neu)) return;
+      var a = s(old[k]), b = s(neu[k]); if (a === b) return;
+      out.push(PRIVATE_FIELDS.indexOf(k) >= 0 ? { field: k, before: a ? '(이전 값)' : '', after: b ? '(바뀜)' : '(지움)' } : { field: k, before: a, after: b });
+    });
+    if ('groupKey' in neu && s(old.groupKey) && s(old.groupKey) !== s(neu.groupKey)) out.push({ field: 'groupKey', before: groupLabel(old.groupKey), after: groupLabel(neu.groupKey) });
+    if ('pieces' in neu) ['R1', 'R2'].forEach(function (r) {
+      var a = piecesFor({ pieces: old.pieces }, r), b = piecesFor({ pieces: neu.pieces }, r);
+      if (piecesText(a) === piecesText(b)) return;
+      out.push({ field: 'pieces', round: r, before: piecesText(a), after: piecesText(b), note: pieceChangeKind(a, b) });
+    });
+    return out;
+  }
+  function historyText(h) { return (FIELD_LABEL[h.field] || h.field) + (h.round ? '(' + h.round + ')' : ''); }
+
   function roundCfg(cfg, round) {
     var p = round === 'R2' ? 'r2' : 'r1';
     return {
@@ -1113,7 +1152,8 @@ var KC = (function () {
     var merged = round === 'R1' ? incoming.concat(others) : others.concat(incoming);
     var now = db.store.now();
     db.upsert('Participants', [{ id: q.id, pieces: normPieces(merged), piecesAt: now }]);
-    db.log(q.name, 'updateMyPieces', round + ' ' + piecesText(before) + ' → ' + piecesText(incoming));
+    addHistory(db, '참가자 본인', q.id, [{ field: 'pieces', round: round, before: piecesText(before), after: piecesText(incoming), note: pieceChangeKind(before, incoming) }]);
+    db.log('참가자', 'updateMyPieces', q.id + ' ' + round + ' 곡목 ' + (pieceChangeKind(before, incoming) || '수정'));
     db.invalidate();
     return participantView(db, db.pmap()[q.id]);
   });
@@ -1200,7 +1240,7 @@ var KC = (function () {
 
   // ── 관리자 ──
   // 화면이 가진 자료 버전이 지금과 같으면 시트를 읽지 않고 '그대로'만 알려 줌
-  var LOAD_TABLES = ['Config', 'Groups', 'Participants', 'Sessions', 'Entries', 'Judges', 'Scores', 'Submissions', 'Plan', 'Staff', 'Work', 'Prizes', 'Requests', 'Docs', 'Seasons'];
+  var LOAD_TABLES = ['Config', 'Groups', 'Participants', 'Sessions', 'Entries', 'Judges', 'Scores', 'Submissions', 'Plan', 'Staff', 'Work', 'Prizes', 'Requests', 'Docs', 'Seasons', 'History'];
   def('adminLoad', 'admin', false, function (db, p, auth) {
     var ver = db.store.ver ? db.store.ver() : '';
     if (p.ver && ver && s(p.ver) === ver) return { same: true, ver: ver };
@@ -1217,7 +1257,8 @@ var KC = (function () {
       sessions: db.t('Sessions'), entries: db.t('Entries'), judges: db.t('Judges'),
       submissions: db.t('Submissions'), results: results, plan: db.t('Plan'),
       staff: db.t('Staff'), work: db.t('Work'), prizes: db.t('Prizes'), requests: db.t('Requests'), docs: db.t('Docs'), judgePeople: judgeSummary(db),
-      seasons: db.t('Seasons')   // 통계만 (명단은 archiveSearch로 따로)
+      seasons: db.t('Seasons'),   // 통계만 (명단은 archiveSearch로 따로)
+      history: db.t('History').slice(-3000)   // 수정 기록 (최근 것)
     };
   });
 
@@ -1285,8 +1326,10 @@ var KC = (function () {
     var m = {}; Object.keys(old).forEach(function (k) { m[k] = old[k]; }); Object.keys(o).forEach(function (k) { m[k] = o[k]; });
     o.groupKey = makeGroupKey(cfg, m.division, m.category, m.gender);
     o.id = s(r.id);
+    var ch = old.id ? diffParticipant(old, o) : [];
     db.upsert('Participants', [o]);
-    db.log('admin', 'saveParticipant', o.id);
+    if (ch.length) { ch.forEach(function (h) { if (s(p.note)) h.note = (h.note ? h.note + ' · ' : '') + s(p.note); }); addHistory(db, db.who || '관리자', o.id, ch); }
+    db.log('admin', 'saveParticipant', o.id + (old.id ? (ch.length ? ' 수정: ' + ch.map(historyText).join(', ') : ' (바뀐 것 없음)') : ' 추가'));
     return o;
   });
 
@@ -1662,15 +1705,44 @@ var KC = (function () {
     };
   });
 
+  // 라운드별 곡목 수정 기록 (참가자마다 최근 것부터)
+  function pieceHistory(db, round) {
+    var out = {};
+    db.t('History').filter(function (h) { return h.field === 'pieces' && h.round === round; }).forEach(function (h, i) { (out[h.pid] = out[h.pid] || []).push({ time: h.time, actor: h.actor, before: h.before, after: h.after, note: h.note, _i: i }); });
+    Object.keys(out).forEach(function (k) { out[k].sort(function (a, b) { return cmpKo(b.time, a.time) || b._i - a._i; }); out[k].forEach(function (x) { delete x._i; }); });
+    return out;
+  }
   def('deskSession', 'desk', false, function (db, p) {
     var x = db.t('Sessions').filter(function (q) { return q.sessionId === p.sessionId; })[0];
     if (!x) fail('조 정보를 찾을 수 없습니다.');
-    var pm = db.pmap(), po = perfOrders(db, x.round, x.groupKey), cfg = db.cfg();
+    var pm = db.pmap(), po = perfOrders(db, x.round, x.groupKey), cfg = db.cfg(), ph = pieceHistory(db, x.round);
     var list = db.t('Entries').filter(function (e) { return e.sessionId === x.sessionId; }).map(function (e) {
       var q = pm[e.pid] || {};
-      return { entryId: e.entryId, pid: e.pid, name: q.name, birth: q.birth, school: q.school, grade: q.grade, phone4: digits(q.phone).slice(-4), guardian: q.guardianName, seq: +e.seq, drawNo: s(e.drawNo), perfOrder: po[e.entryId], attend: s(e.attend), checkinAt: s(e.checkinAt), pieces: piecesFor(q, x.round) };
+      return { entryId: e.entryId, pid: e.pid, name: q.name, birth: q.birth, school: q.school, grade: q.grade, phone4: digits(q.phone).slice(-4), guardian: q.guardianName, seq: +e.seq, drawNo: s(e.drawNo), perfOrder: po[e.entryId], attend: s(e.attend), checkinAt: s(e.checkinAt), pieces: piecesFor(q, x.round), pieceLog: ph[e.pid] || [] };
     }).sort(function (a, b) { return a.seq - b.seq; });
     return { session: sessionView(x), round: x.round, roundName: roundCfg(cfg, x.round).name, groupKey: x.groupKey, groupLabel: groupLabel(x.groupKey), title: cfg.title, list: list, current: s(x.current), offset: sessionOffsets(db, x.round, x.groupKey)[x.sessionId] || 0 };
+  });
+
+  // 현장에서 곡목 바로 고치기 (진행요원·관리자) — 바뀌기 전·후와 누가·왜를 수정 기록에 남김
+  def('setPieces', 'desk', true, function (db, p, auth) {
+    var q = db.pmap()[s(p.pid)]; if (!q) fail('참가자를 찾을 수 없습니다.');
+    var round = p.round === 'R2' ? 'R2' : 'R1';
+    var by = s(p.by).slice(0, 20) || (auth && auth.role === 'admin' ? s(db.who) || '관리자' : '');
+    if (!by) fail('수정한 사람 이름을 적어 주세요. (수정 기록에 남아요)');
+    var before = piecesFor(q, round);
+    var incoming = (Array.isArray(p.pieces) ? p.pieces : []).slice(0, 6).map(function (x) {
+      return { round: round, kind: s(x.kind).slice(0, 30), country: s(x.country).slice(0, 30), composer: s(x.composer).slice(0, 80), title: s(x.title).slice(0, 200) };
+    }).filter(function (x) { return x.title || x.composer; });
+    if (incoming.some(function (x) { return !x.title; })) fail('곡명이 비어 있는 줄이 있어요.');
+    if (piecesText(before) === piecesText(incoming)) return { pieces: before, changed: false };
+    var others = parsePieces(q.pieces).filter(function (x) { return x.round !== round && x.round; });
+    db.upsert('Participants', [{ id: q.id, pieces: normPieces(round === 'R1' ? incoming.concat(others) : others.concat(incoming)) }]);
+    var kind = pieceChangeKind(before, incoming), note = [kind, s(p.note).slice(0, 150)].filter(Boolean).join(' · ');
+    var actor = auth && auth.role === 'admin' ? (s(db.who) || '관리자') + (s(p.by) && s(p.by) !== s(db.who) ? '(' + s(p.by) + ')' : '') : '현장 ' + by;
+    addHistory(db, actor, q.id, [{ field: 'pieces', round: round, before: piecesText(before), after: piecesText(incoming), note: note }]);
+    db.log(auth && auth.role === 'admin' ? 'admin' : 'desk:' + by, 'setPieces', q.id + ' ' + round + ' 곡목 ' + (kind || '수정'));
+    db.invalidate();
+    return { pieces: piecesFor(db.pmap()[q.id], round), changed: true, kind: kind };
   });
 
   def('checkin', 'desk', true, function (db, p) {
@@ -1789,10 +1861,10 @@ var KC = (function () {
     if (!x || !judgeCanSee(db, j, x)) fail('이 조의 채점 권한이 없습니다.');
     var po = perfOrders(db, x.round, x.groupKey), pm = db.pmap();
     var mine = {}; db.t('Scores').forEach(function (q) { if (q.judgeId === j.judgeId && q.round === x.round) mine[q.pid] = q; });
-    var showNames = cfg.showNamesToJudges === 'Y', showPieces = cfg.showPiecesToJudges !== 'N';
+    var showNames = cfg.showNamesToJudges === 'Y', showPieces = cfg.showPiecesToJudges !== 'N', phj = showPieces ? pieceHistory(db, x.round) : {};
     var list = db.t('Entries').filter(function (e) { return e.sessionId === x.sessionId; }).map(function (e) {
       var q = pm[e.pid] || {}, m = mine[e.pid];
-      return { pid: e.pid, seq: +e.seq, perfOrder: po[e.entryId], drawNo: s(e.drawNo), absent: e.attend === 'N', value: m ? s(m.value) : '', comment: m ? s(m.comment) : '', name: showNames ? q.name : '', pieces: showPieces ? piecesFor(q, x.round) : [] };
+      return { pid: e.pid, seq: +e.seq, perfOrder: po[e.entryId], drawNo: s(e.drawNo), absent: e.attend === 'N', value: m ? s(m.value) : '', comment: m ? s(m.comment) : '', name: showNames ? q.name : '', pieces: showPieces ? piecesFor(q, x.round) : [], piecesChanged: !!(phj[e.pid] && phj[e.pid].length) };
     }).sort(function (a, b) {
       var pa = a.perfOrder == null ? 9999 + a.seq : a.perfOrder, pb = b.perfOrder == null ? 9999 + b.seq : b.perfOrder;
       return pa - pb;
@@ -2046,7 +2118,9 @@ var KC = (function () {
   }
   function todayOf(db) { return s(db.store.now()).slice(0, 10); }
   function purgeExpired(db) {
-    var t = todayOf(db), due = db.t('Seasons').filter(function (z) { return !s(z.purgedAt) && s(z.purgeAt) && s(z.purgeAt) <= t; });
+    var t = todayOf(db), lim = (+t.slice(0, 4) - KEEP_YEARS) + t.slice(4);
+    if (db.t('History').some(function (h) { return s(h.time).slice(0, 10) < lim; })) db.replaceWhere('History', function (h) { return s(h.time).slice(0, 10) < lim; }, []);
+    var due = db.t('Seasons').filter(function (z) { return !s(z.purgedAt) && s(z.purgeAt) && s(z.purgeAt) <= t; });
     if (!due.length) return [];
     var nos = due.map(function (z) { return s(z.no); });
     db.replaceWhere('Archive', function (r) { return nos.indexOf(s(r.no)) >= 0; }, []);
@@ -2501,7 +2575,7 @@ var KC = (function () {
     normDate: normDate, normTime: normTime, cmpKo: cmpKo, digits: digits, randToken: randToken,
     parsePieces: parsePieces, normPieces: normPieces, piecesFor: piecesFor, pieceLine: pieceLine, piecesText: piecesText,
     splitDivision: splitDivision, normCategory: normCategory, pieceEditState: pieceEditState, regionOf: regionOf, isFar: isFar,
-    planDay: planDay, retimeDay: retimeDay, planAll: planAll, autoPlan: autoPlan, durMin: durMin, parseSec: parseSec, fmtSec: fmtSec, parseBlocks: parseBlocks,
+    planDay: planDay, retimeDay: retimeDay, pieceChangeKind: pieceChangeKind, FIELD_LABEL: FIELD_LABEL, planAll: planAll, autoPlan: autoPlan, durMin: durMin, parseSec: parseSec, fmtSec: fmtSec, parseBlocks: parseBlocks,
     withholding: withholding, prizeTable: prizeTable, prizeAmount: prizeAmount, workMinutes: workMinutes, staffPay: staffPay, weekKey: weekKey,
     parseIdText: parseIdText, parseBankText: parseBankText, judgeCovers: judgeCovers,
     parseJudgeRates: parseJudgeRates, judgeDayFee: judgeDayFee, parseDayInfo: parseDayInfo, dayInfoStr: dayInfoStr, isWeekend: isWeekend,

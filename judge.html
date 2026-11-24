@@ -119,7 +119,7 @@
       (sh.list.some(r => !r.drawNo) ? '<div class="note warn small" style="margin-bottom:12px">추첨 전인 연주자는 \'순번\'으로 표시돼요. 진행요원이 추첨번호를 넣으면 경연순번(= 추첨번호)으로 바뀝니다.</div>' : '') +
       sh.list.map((r, i) => '<div class="pf ' + (r.absent ? 'absent' : '') + (r.value !== '' ? ' done' : '') + (r.pid === sh.currentPid ? ' now' : '') + '" data-i="' + i + '" id="pf-' + esc(r.pid) + '">' +
         '<div class="no">' + (r.pid === sh.currentPid ? '<span class="badge acc" style="margin-bottom:4px">지금 연주</span>' : '') + (r.perfOrder != null ? '<small>경연순번</small><b>' + r.perfOrder + '</b>' : '<small>순번</small><b>' + r.seq + '</b>') + '</div>' +
-        '<div class="body"><div class="info">' + (r.name ? '<div class="small"><b>' + esc(r.name) + '</b></div>' : '') + (r.pieces && r.pieces.length ? '<div class="songs">' + App.piecesHTML(r.pieces) + '</div>' : '') + '</div>' +
+        '<div class="body"><div class="info">' + (r.name ? '<div class="small"><b>' + esc(r.name) + '</b></div>' : '') + (r.pieces && r.pieces.length ? '<div class="songs">' + App.piecesHTML(r.pieces, { changed: r.piecesChanged }) + '</div>' : '') + '</div>' +
         '<div class="act">' + (r.absent ? '<span class="badge">불참</span>' : valueButtons(r, ro) + '<div class="st" data-st></div>') + '</div></div>' +
         (isRank && showComments && !r.absent ? '<div class="cm"><textarea placeholder="심사평 (테크닉, 음악성, 곡 이해, 장단점)" data-c ' + ro + '>' + esc(r.comment) + '</textarea></div>' : '') +
         '</div>').join('') +

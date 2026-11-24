@@ -128,6 +128,39 @@ if (!TABS_ALL.some(t => t[0] === TAB)) TAB = 'dash';
 
 const isPaid = p => KC.isPaid(p), isActive = p => KC.isActive(p);
 const PT = (p, r) => KC.piecesText(KC.piecesFor(p, r));           // 곡목 한 줄 텍스트
+// 수정 기록 — 참가자(·라운드·항목)별
+const HIST = (pid, field, round) => (D.history || []).map((h, i) => [h, i]).filter(([h]) => h.pid === pid && (!field || h.field === field) && (!round || h.round === round)).sort((a, b) => KC.cmpKo(b[0].time, a[0].time) || b[1] - a[1]).map(x => x[0]);
+const PCHG = (pid, round) => HIST(pid, 'pieces', round).length > 0;   // 곡목이 바뀐 적 있음
+// 관리자 화면에서 곡목 바로 고치기 (현장 화면과 같은 창)
+function quickPieces(pid, round, after) {
+  const p = D.participants.find(x => x.id === pid); if (!p) return;
+  App.piecesEditor({
+    name: p.name + ' (' + (p.school || '') + ')', roundName: rname(round) + ' · ' + GL(p.groupKey), pieces: KC.piecesFor(p, round), by: D.me && D.me.name || '',
+    log: HIST(pid, 'pieces', round).map(h => ({ time: h.time, actor: h.actor, before: h.before, after: h.after, note: h.note })),
+    onSave: (pieces, note, by) => call('setPieces', { pid, round, pieces, note, by }).then(r => { toast(r.changed ? '곡목을 고쳤어요' + (r.kind ? ' — ' + r.kind : '') + ' (수정 기록에 남았어요)' : '바뀐 것이 없어요', 'ok'); return refresh().then(() => { if (after) after(); }); })
+  });
+}
+// 수정 기록 보기 (참가자 탭)
+function historyDialog(pid) {
+  const pk = {}; D.participants.forEach(p => pk[p.id] = p);
+  let f = { q: '', k: '' };
+  const m = modal('<h2>수정 기록</h2><p class="small muted" style="margin-top:-4px">참가자 정보·곡목을 누가 언제 어떻게 바꿨는지 남아요. 곡목은 바뀌기 전·후 그대로, 연락처·주소 같은 개인 정보는 \'바뀜\'만 남겨요. 3년이 지나면 지워져요.</p>' +
+    '<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px"><input id="hq" placeholder="이름·접수번호 검색" style="max-width:220px"' + (pid ? ' value="' + esc(pid) + '"' : '') + '><select id="hk"><option value="">모든 항목</option><option value="pieces">곡목만</option><option value="other">곡목 빼고</option></select><span class="sp"></span><button class="sm" id="hx">엑셀로 받기</button></div><div id="hb"></div>' +
+    '<div class="row end" style="margin-top:10px"><button data-close>닫기</button></div>', { wide: true });
+  const rows = () => (D.history || []).map((h, i) => [h, i]).filter(([h]) => { const p = pk[h.pid] || {}; return (!f.q || [p.name, h.pid, p.school].some(v => String(v || '').indexOf(f.q) >= 0)) && (!f.k || (f.k === 'pieces' ? h.field === 'pieces' : h.field !== 'pieces')); }).sort((a, b) => KC.cmpKo(b[0].time, a[0].time) || b[1] - a[1]).map(x => x[0]);
+  const lab = h => (KC.FIELD_LABEL[h.field] || h.field) + (h.round ? ' · ' + rname(h.round) : '');
+  const draw = () => {
+    const L = rows();
+    $('#hb', m.el).innerHTML = L.length ? '<div class="scroll" style="max-height:60vh"><table><thead><tr><th>언제</th><th>누가</th><th>참가자</th><th>항목</th><th>바꾸기 전 → 후</th><th>메모</th></tr></thead><tbody>' +
+      L.slice(0, 500).map(h => { const p = pk[h.pid] || {}; return '<tr><td class="small" style="white-space:nowrap">' + esc(String(h.time).slice(5, 16)) + '</td><td class="small">' + esc(h.actor) + '</td><td><b>' + esc(p.name || h.pid) + '</b> <span class="small muted">' + esc(GL(p.groupKey || '')) + '</span></td><td class="small">' + esc(lab(h)) + '</td><td class="small"><span class="muted">' + esc(h.before || '(없음)') + '</span><br>→ <b>' + esc(h.after || '(없음)') + '</b></td><td class="small">' + esc(h.note) + '</td></tr>'; }).join('') + '</tbody></table></div>' + (L.length > 500 ? '<p class="small muted">앞의 500건만 — 검색으로 좁혀 주세요</p>' : '')
+      : '<div class="empty">수정 기록이 없어요.</div>';
+  };
+  $('#hq', m.el).addEventListener('input', e => { f.q = e.target.value.trim(); draw(); });
+  $('#hk', m.el).addEventListener('change', e => { f.k = e.target.value; draw(); });
+  $('#hx', m.el).addEventListener('click', () => { const L = rows(); App.sheetDownload({ title: D.cfg.title + ' 수정 기록', sheets: [{ name: '수정 기록', rows: [['언제', '누가', '접수번호', '이름', '편성 부문', '항목', '바꾸기 전', '바꾼 뒤', '메모']].concat(L.map(h => { const p = pk[h.pid] || {}; return [h.time, h.actor, h.pid, p.name || '', GL(p.groupKey || ''), lab(h), h.before, h.after, h.note]; })) }] }); });
+  if (pid) f.q = pid;
+  draw();
+}
 const GL = k => KC.groupLabel(k);
 const call = (a, p) => api(a, p, 'admin');
 function onErr(e) { if (e.needLogin) needLogin(); else toast(e.message, 'bad'); }
@@ -427,13 +460,14 @@ function loadPrevFile(file) {
 
 /* ================= 참가자 ================= */
 function people() {
-  view().innerHTML = '<div class="tb-tools"><label class="btn pri" style="cursor:pointer">신청자 엑셀 불러오기<input type="file" id="imp" accept=".xlsx,.xls,.csv" hidden></label><button id="exp">엑셀로 내보내기</button><button id="add">한 명 추가</button><span class="sp"></span>' +
+  view().innerHTML = '<div class="tb-tools"><label class="btn pri" style="cursor:pointer">신청자 엑셀 불러오기<input type="file" id="imp" accept=".xlsx,.xls,.csv" hidden></label><button id="exp">엑셀로 내보내기</button><button id="add">한 명 추가</button><button id="hist">수정 기록' + ((D.history || []).length ? ' <span class="badge">' + D.history.length + '</span>' : '') + '</button><span class="sp"></span>' +
     '<input id="q" placeholder="이름·접수번호·학교 검색" value="' + esc(PFILTER.q) + '"><select id="g"><option value="">전체 부문</option>' + D.groupKeys.map(k => '<option ' + (PFILTER.g === k ? 'selected' : '') + ' value="' + esc(k) + '">' + esc(GL(k)) + '</option>').join('') + '</select>' +
     '<select id="pf"><option value="">입금 전체</option><option value="Y" ' + (PFILTER.pay === 'Y' ? 'selected' : '') + '>입금 확인</option><option value="N" ' + (PFILTER.pay === 'N' ? 'selected' : '') + '>입금 대기</option><option value="X" ' + (PFILTER.pay === 'X' ? 'selected' : '') + '>취소</option></select></div>' +
     '<div id="pt"></div>';
   $('#imp').addEventListener('change', e => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ''; });
   $('#exp').addEventListener('click', exportPeople);
   $('#add').addEventListener('click', () => editPerson({ id: '', status: '정상' }));
+  $('#hist').addEventListener('click', () => historyDialog());
   ['q', 'g', 'pf'].forEach(id => $('#' + id).addEventListener('input', () => { PFILTER = { q: $('#q').value, g: $('#g').value, pay: $('#pf').value }; drawPeople(); }));
   drawPeople();
 }
@@ -449,9 +483,12 @@ function drawPeople() {
   $('#pt').innerHTML = '<p class="small muted">' + list.length + '명' + (list.length > 400 ? ' (앞의 400명만 표시 — 검색으로 좁혀 주세요)' : '') + '</p>' +
     (list.length ? '<div class="scroll card" style="padding:0;max-height:70vh"><table><thead><tr><th>접수번호</th><th>이름</th><th>생년월일</th><th>부문</th><th class="hide-m">학교·학년</th><th class="hide-m">지역</th><th class="hide-m">연락처</th><th>입금</th><th></th></tr></thead><tbody>' +
       show.map(p => '<tr class="' + (isActive(p) ? '' : 'dim') + '"><td class="num">' + esc(p.id) + '</td><td><b>' + esc(p.name) + '</b></td><td class="num">' + esc(fmtBirth(p.birth)) + '</td><td>' + esc(GL(p.groupKey)) + '</td><td class="hide-m small">' + esc(p.school) + ' ' + esc(p.grade) + '</td><td class="hide-m small">' + (p.region ? (KC.isFar(D.cfg, p) ? '<span class="badge warn">' + esc(p.region) + '</span>' : esc(p.region)) : '') + '</td><td class="hide-m small num">' + esc(App.phone4(p.phone)) + (p.guardianPhone ? ' / 보호자 ' + esc(App.phone4(p.guardianPhone)) : '') + '</td>' +
-        '<td>' + (!isActive(p) ? '<span class="badge">' + (/환불/.test(p.status + p.payStatus) ? '환불' : '취소') + '</span>' : isPaid(p) ? '<span class="badge ok">확인</span>' : '<span class="badge warn">입금 대기</span>') + (p.piecesAt ? ' <span class="badge acc" title="참가자가 곡목을 고친 시각">곡목 수정 ' + esc(String(p.piecesAt).slice(5, 16)) + '</span>' : '') + '</td><td><button class="sm" data-ed="' + esc(p.id) + '">수정</button></td></tr>').join('') +
+        '<td>' + (!isActive(p) ? '<span class="badge">' + (/환불/.test(p.status + p.payStatus) ? '환불' : '취소') + '</span>' : isPaid(p) ? '<span class="badge ok">확인</span>' : '<span class="badge warn">입금 대기</span>') + (p.piecesAt ? ' <span class="badge acc" title="참가자가 곡목을 고친 시각">곡목 수정 ' + esc(String(p.piecesAt).slice(5, 16)) + '</span>' : '') + '</td><td style="white-space:nowrap"><button class="sm" data-ed="' + esc(p.id) + '">수정</button>' + (KC.piecesFor(p, 'R1').length || KC.piecesFor(p, 'R2').length ? '<button class="sm" data-qp="' + esc(p.id) + '">곡목</button>' : '') + (HIST(p.id).length ? '<button class="sm" data-hi="' + esc(p.id) + '" title="수정 기록">기록 ' + HIST(p.id).length + '</button>' : '') + '</td></tr>').join('') +
       '</tbody></table></div>' : '<div class="empty">참가자가 없어요. 홈페이지에서 내려받은 신청자 엑셀(신청자관리 xlsx)을 불러오세요.</div>');
   $$('[data-ed]').forEach(b => b.addEventListener('click', () => editPerson(D.participants.find(p => p.id === b.dataset.ed))));
+  // 곡목: 본선 편성이 있으면 본선, 아니면 예선
+  $$('[data-qp]').forEach(b => b.addEventListener('click', () => { const id = b.dataset.qp, r2 = D.entries.some(e => e.pid === id && e.round === 'R2') && KC.piecesFor(D.participants.find(p => p.id === id), 'R2').length; quickPieces(id, r2 ? 'R2' : 'R1'); }));
+  $$('[data-hi]').forEach(b => b.addEventListener('click', () => historyDialog(b.dataset.hi)));
 }
 function editPerson(p) {
   const F = [['id', '접수번호'], ['name', '이름'], ['birth', '생년월일(6자리)'], ['gender', '성별'], ['division', '지원 부문'], ['category', '지원 구분'], ['school', '학교'], ['grade', '학년'], ['phone', '휴대폰'], ['guardianName', '보호자 이름'], ['guardianPhone', '보호자 휴대폰'], ['email', '이메일'], ['zip', '우편번호'], ['address', '주소 (시·도 판별용)'], ['payStatus', '결제 상태'], ['payMemo', '입금 메모'], ['status', '상태(정상/취소)'], ['teacher', '사사 선생님'], ['note', '비고']];
@@ -459,6 +496,8 @@ function editPerson(p) {
     '<h3 style="margin-top:16px">곡목</h3><p class="small muted" style="margin-top:-4px">성악처럼 참가자가 곡을 고르는 부문만 쓰면 돼요. 라운드마다 위에서부터 ①②③ 순서로 심사위원 화면에 보여요. ▲▼로 순서를 바꿀 수 있어요.' + (p.piecesAt ? ' <b>참가자가 ' + esc(p.piecesAt) + '에 직접 수정함.</b>' : '') + '</p>' +
     '<div class="scroll"><table id="pcs"><thead><tr><th>라운드</th><th>구분</th><th>국가</th><th>작곡가</th><th>곡명</th><th></th></tr></thead><tbody></tbody></table></div><button type="button" class="sm" id="pca" style="margin-top:8px">곡 추가</button>' +
     '<p class="small muted">부문·구분·성별을 바꾸면 편성 부문(예: 성악 고등부(남))이 다시 계산돼요. 이미 조편성이 끝났다면 조편성 탭에서 옮겨 주세요.</p>' +
+    (p.id ? '<div style="margin-top:10px"><label class="f" for="penote">고친 이유 <span class="small muted">(선택 · 수정 기록에 남아요)</span></label><input id="penote" placeholder="예: 현장에서 학교명 확인"></div>' : '') +
+    (p.id && HIST(p.id).length ? '<h3 style="margin-top:16px">수정 기록 <span class="small muted">' + HIST(p.id).length + '건</span></h3><div class="scroll" style="max-height:220px"><table class="small"><tbody>' + HIST(p.id).slice(0, 30).map(h => '<tr><td style="white-space:nowrap">' + esc(String(h.time).slice(5, 16)) + '</td><td>' + esc(h.actor) + '</td><td>' + esc((KC.FIELD_LABEL[h.field] || h.field) + (h.round ? ' · ' + rname(h.round) : '')) + '</td><td><span class="muted">' + esc(h.before || '(없음)') + '</span> → <b>' + esc(h.after || '(없음)') + '</b></td><td>' + esc(h.note) + '</td></tr>').join('') + '</tbody></table></div>' : '') +
     '<div class="row end"><button type="button" data-close>닫기</button><button class="pri">저장</button></div></form>', { wide: true });
   let PCS = KC.parsePieces(p.pieces).map(x => Object.assign({}, x));
   const W = { kind: 104, country: 84, composer: 150, title: 300 };
@@ -478,7 +517,7 @@ function editPerson(p) {
     const row = {}; new FormData(e.target).forEach((v, k) => row[k] = v);
     row.pieces = PCS.map(x => ({ round: x.round || 'R1', kind: x.kind || '', country: x.country || '', composer: x.composer || '', title: x.title || '' }));
     if (!row.id) { toast('접수번호를 넣어 주세요', 'bad'); return; }
-    call('saveParticipant', { row }).then(() => { m.close(); toast('저장했어요', 'ok'); refresh(); }).catch(onErr);
+    call('saveParticipant', { row, note: ($('#penote', m.el) || {}).value || '' }).then(() => { m.close(); toast('저장했어요 — 바뀐 내용은 수정 기록에 남아요', 'ok'); refresh(); }).catch(onErr);
   });
 }
 function importFile(file) {
@@ -747,12 +786,14 @@ function genDialog(g) {
 function sessionList(sid) {
   const s = D.sessions.find(x => x.sessionId === sid), pk = {}; D.participants.forEach(p => pk[p.id] = p);
   const list = D.entries.filter(e => e.sessionId === sid).sort((a, b) => a.seq - b.seq);
+  const WPS = list.some(e => KC.piecesFor(pk[e.pid], s.round).length);
   const others = D.sessions.filter(x => x.round === s.round && x.groupKey === s.groupKey && x.sessionId !== sid).concat(D.sessions.filter(x => x.round === s.round && x.groupKey !== s.groupKey));
   const m = modal('<h2>' + esc(GL(s.groupKey)) + ' ' + esc(s.label) + '</h2><p class="muted">' + esc(fmtDate(s.date, true)) + ' 추첨 ' + esc(s.drawTime) + ' · 시작 ' + esc(s.startTime) + ' · ' + list.length + '명</p>' +
-    '<div class="scroll mlist"><table><thead><tr><th class="n">순번</th><th>이름</th><th>학교</th><th class="c">추첨번호</th><th class="c">연주순서</th><th>출석</th><th>다른 조로 옮기기</th></tr></thead><tbody>' +
-    list.map(e => { const p = pk[e.pid]; return '<tr><td class="n">' + e.seq + '</td><td><b>' + esc(p.name) + '</b> <span class="small muted">' + esc(p.birth) + '</span>' + (p.region ? ' <span class="badge ' + (KC.isFar(D.cfg, p) ? 'warn' : '') + '">' + esc(p.region) + '</span>' : '') + '</td><td class="small">' + esc(p.school) + ' ' + esc(p.grade) + '</td><td class="c">' + (e.drawNo ? drawOffset(s) + (+e.drawNo) : '') + '</td><td class="c">' + (e.drawNo ? esc(e.drawNo) + '번' : '') + '</td><td>' + (e.attend === 'Y' ? '<span class="badge ok">출석</span>' : e.attend === 'N' ? '<span class="badge">불참</span>' : '') + '</td><td><select data-mv="' + esc(e.entryId) + '" style="min-height:34px;padding:4px 6px;font-size:14px"><option value="">—</option>' + others.map(o => '<option value="' + esc(o.sessionId) + '">' + esc(GL(o.groupKey)) + ' ' + esc(o.label) + ' ' + esc(fmtDate(o.date)) + '</option>').join('') + '</select></td></tr>'; }).join('') +
+    '<div class="scroll mlist"><table><thead><tr><th class="n">순번</th><th>이름</th><th>학교</th><th class="c">추첨번호</th><th class="c">연주순서</th><th>출석</th>' + (list.some(e => KC.piecesFor(pk[e.pid], s.round).length) ? '<th>곡목</th>' : '') + '<th>다른 조로 옮기기</th></tr></thead><tbody>' +
+    list.map(e => { const p = pk[e.pid]; return '<tr><td class="n">' + e.seq + '</td><td><b>' + esc(p.name) + '</b> <span class="small muted">' + esc(p.birth) + '</span>' + (p.region ? ' <span class="badge ' + (KC.isFar(D.cfg, p) ? 'warn' : '') + '">' + esc(p.region) + '</span>' : '') + '</td><td class="small">' + esc(p.school) + ' ' + esc(p.grade) + '</td><td class="c">' + (e.drawNo ? drawOffset(s) + (+e.drawNo) : '') + '</td><td class="c">' + (e.drawNo ? esc(e.drawNo) + '번' : '') + '</td><td>' + (e.attend === 'Y' ? '<span class="badge ok">출석</span>' : e.attend === 'N' ? '<span class="badge">불참</span>' : '') + '</td>' + (WPS ? '<td class="pcell small">' + App.piecesHTML(KC.piecesFor(p, s.round), { changed: PCHG(p.id, s.round) }) + '<button class="sm" data-qp="' + esc(p.id) + '">곡목 고치기</button></td>' : '') + '<td><select data-mv="' + esc(e.entryId) + '" style="min-height:34px;padding:4px 6px;font-size:14px"><option value="">—</option>' + others.map(o => '<option value="' + esc(o.sessionId) + '">' + esc(GL(o.groupKey)) + ' ' + esc(o.label) + ' ' + esc(fmtDate(o.date)) + '</option>').join('') + '</select></td></tr>'; }).join('') +
     '</tbody></table></div><div class="row end" style="margin-top:12px"><button data-close>닫기</button></div>', { wide: true });
   $$('[data-mv]', m.el).forEach(sel => sel.addEventListener('change', () => { if (!sel.value) return; call('moveEntry', { entryId: sel.dataset.mv, sessionId: sel.value }).then(() => { toast('옮겼어요', 'ok'); m.close(); refresh().then(() => sessionList(sid)); }).catch(onErr); }));
+  $$('[data-qp]', m.el).forEach(b => b.addEventListener('click', () => quickPieces(b.dataset.qp, s.round, () => { m.close(); sessionList(sid); })));
 }
 
 
@@ -1252,7 +1293,7 @@ function attHTML(sid, kind) {
   const foot = '<span>총 ' + list.length + '명 (불참 ' + list.filter(e => e.attend === 'N').length + '명)</span><span>담당 ____________</span>';
   // 연주순서 = 조 안에서 몇 번째(1번부터) · 추첨번호 = 부문 안에서 이어지는 번호(추첨번호표·심사위원 경연순번) · 순번 = 처음 편성 순번
   if (withP) return pg('연주순서 출석부', [15, 15, 12, 42, 34, 0, 12, 18], ['연주순서', '추첨번호', '순번', '이름 · 학교', '연락처', '곡목', '출석', '비고'],
-    rows.map(e => { const [a, g] = phs(e.p); return tr + '<td class="c"><b>' + (e.drawNo ? esc(e.drawNo) : '') + '</b></td><td class="c">' + (e.perf != null ? e.perf : '') + '</td><td class="c">' + e.seq + '</td><td><b>' + esc(e.p.name) + '</b><span class="sub">' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</span></td><td class="ph">' + esc(a) + (g ? '<span class="sub">보호자 ' + esc(g) + '</span>' : '') + '</td><td class="wr small">' + App.piecesHTML(KC.piecesFor(e.p, s.round)) + '</td><td class="c">' + att(e) + '</td><td></td></tr>'; }).join(''), foot);
+    rows.map(e => { const [a, g] = phs(e.p); return tr + '<td class="c"><b>' + (e.drawNo ? esc(e.drawNo) : '') + '</b></td><td class="c">' + (e.perf != null ? e.perf : '') + '</td><td class="c">' + e.seq + '</td><td><b>' + esc(e.p.name) + '</b><span class="sub">' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</span></td><td class="ph">' + esc(a) + (g ? '<span class="sub">보호자 ' + esc(g) + '</span>' : '') + '</td><td class="wr small">' + App.piecesHTML(KC.piecesFor(e.p, s.round), { changed: PCHG(e.p.id, s.round) }) + '</td><td class="c">' + att(e) + '</td><td></td></tr>'; }).join(''), foot);
   return pg('연주순서 출석부', [16, 16, 12, 28, 0, 34, 34, 13, 24], ['연주순서', '추첨번호', '순번', '이름', '학교·학년', '휴대폰', '보호자 휴대폰', '출석', '비고'],
     rows.map(e => { const [a, g] = phs(e.p); return tr + '<td class="c"><b>' + (e.drawNo ? esc(e.drawNo) : '') + '</b></td><td class="c">' + (e.perf != null ? e.perf : '') + '</td><td class="c">' + e.seq + '</td><td><b>' + esc(e.p.name) + '</b></td><td>' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</td><td class="ph">' + esc(a) + '</td><td class="ph">' + esc(g) + '</td><td class="c">' + att(e) + '</td><td></td></tr>'; }).join(''), foot);
 }
@@ -1280,8 +1321,8 @@ function drawCard() {
   return '<div class="card" id="drc"><div class="row" style="flex-wrap:wrap"><h2 style="margin:0">추첨번호 입력 → 연주순서</h2><span class="sp"></span><button class="sm" id="dra">빈칸 무작위로 채우기</button><button class="sm" id="drx">번호 모두 비우기</button><button class="pri" id="drs">저장</button><button id="drp">저장하고 연주순서 출석부 인쇄</button></div>' +
     '<p class="small muted"><b>' + esc(GL(s.groupKey)) + ' ' + esc(s.label) + '</b> · ' + n + '명. 현장에서 뽑은 추첨번호를 출석부(가나다순) 순서대로 옮겨 적어 주세요 — <b>엔터</b>를 누르면 다음 칸으로 가요. ' +
       '추첨번호는 부문 안에서 이어져서 이 조는 <b>' + (off + 1) + '~' + (off + n) + '번</b>(추첨번호표 번호 = 심사위원 화면의 경연순번), <b>연주순서</b>는 조 안에서 1번부터예요. 번호를 넣으면 출석, 불참에 체크하면 번호 없이 불참으로 저장돼요.</p>' +
-    '<div class="scroll"><table class="drt"><thead><tr><th class="n">순번</th><th>이름</th><th>학교·학년</th><th>휴대폰</th><th>추첨번호 <span class="small muted">' + (off + 1) + '~' + (off + n) + '</span></th><th class="n">연주순서</th><th class="c">불참</th></tr></thead><tbody>' +
-    rows.map(e => '<tr data-e="' + esc(e.entryId) + '"><td class="n">' + e.seq + '</td><td><b>' + esc(e.p.name) + '</b> <span class="small muted">' + esc(fmtBirth(e.p.birth)) + '</span></td><td class="small">' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</td><td class="small num">' + esc(App.fmtPhone(e.p.phone)) + '</td>' +
+    '<div class="scroll"><table class="drt"><thead><tr><th class="n">순번</th><th>이름</th><th>학교·학년</th><th>휴대폰</th>' + (rows.some(e => KC.piecesFor(e.p, s.round).length) ? '<th>곡목</th>' : '') + '<th>추첨번호 <span class="small muted">' + (off + 1) + '~' + (off + n) + '</span></th><th class="n">연주순서</th><th class="c">불참</th></tr></thead><tbody>' +
+    rows.map(e => '<tr data-e="' + esc(e.entryId) + '"><td class="n">' + e.seq + '</td><td><b>' + esc(e.p.name) + '</b> <span class="small muted">' + esc(fmtBirth(e.p.birth)) + '</span></td><td class="small">' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</td><td class="small num">' + esc(App.fmtPhone(e.p.phone)) + '</td>' + (rows.some(x => KC.piecesFor(x.p, s.round).length) ? '<td class="pcell small">' + App.piecesHTML(KC.piecesFor(e.p, s.round), { changed: PCHG(e.p.id, s.round) }) + '<button class="sm" data-qp="' + esc(e.p.id) + '" type="button">곡목 고치기</button></td>' : '') +
       '<td><input class="dn" inputmode="numeric" maxlength="3" autocomplete="off" aria-label="' + esc(e.p.name) + ' 추첨번호" value="' + (e.drawNo ? off + (+e.drawNo) : '') + '" style="width:84px;min-height:38px;padding:4px 8px;font-size:17px;font-weight:700;text-align:center"></td><td class="n po" style="font-weight:700"></td><td class="c"><input type="checkbox" class="ab" aria-label="' + esc(e.p.name) + ' 불참"' + (e.attend === 'N' ? ' checked' : '') + '></td></tr>').join('') +
     '</tbody></table></div><p id="drm" class="small" style="margin:8px 0 0"></p></div>';
 }
@@ -1328,6 +1369,10 @@ function bindDraw() {
     }).catch(err => { busy(btn, false); onErr(err); });
   };
   $('#drs', c).addEventListener('click', e => save(e.target));
+  $$('[data-qp]', c).forEach(b => b.addEventListener('click', () => {
+    if (DRDIRTY) { toast('추첨번호를 먼저 저장해 주세요', 'bad'); return; }
+    quickPieces(b.dataset.qp, D.sessions.find(x => x.sessionId === PSES).round);
+  }));
   $('#drp', c).addEventListener('click', e => save(e.target, sid => App.printHTML(attHTML(sid, 'perf'), { landscape: true })));
   check();
 }
@@ -1348,8 +1393,8 @@ function doPrint(kind) {
   const withP = list.some(e => KC.piecesFor(e.p, s.round).length);
   if (kind === 'songs') {
     if (!withP) { toast('이 조에는 곡목이 등록된 참가자가 없어요. 지정곡 부문이면 곡목표가 필요 없어요.'); return; }
-    App.printHTML('<div class="pr">' + head('심사위원용 곡목표') + '<p style="font-size:9.5pt;margin:0 0 3mm">연주순서대로 각 연주자가 부를 곡입니다. (①②' + (s.round === 'R2' ? '③' : '') + ' 순서로 연주)</p><table><thead><tr><th style="width:16mm">연주순서</th><th>곡목</th></tr></thead><tbody>' +
-      byPerf.map(e => '<tr' + (e.attend === 'N' ? ' style="color:#888"' : '') + '><td class="c"><b style="font-size:13pt">' + (e.perf != null ? e.perf : '순번 ' + e.seq) + '</b>' + (e.attend === 'N' ? '<br>불참' : '') + '</td><td>' + App.piecesHTML(KC.piecesFor(e.p, s.round), { empty: '<span style="color:#888">곡목 미등록</span>' }) + '</td></tr>').join('') + '</tbody></table></div>');
+    App.printHTML('<div class="pr">' + head('심사위원용 곡목표') + '<p style="font-size:9.5pt;margin:0 0 3mm">경연순번(추첨번호)대로 각 연주자가 부를 곡입니다. (①②' + (s.round === 'R2' ? '③' : '') + ' 순서로 연주 · <b>곡목 변경</b> 표시는 현장에서 바뀐 곡목)</p><table><thead><tr><th style="width:16mm">경연순번</th><th>곡목</th></tr></thead><tbody>' +
+      byPerf.map(e => '<tr' + (e.attend === 'N' ? ' style="color:#888"' : '') + '><td class="c"><b style="font-size:13pt">' + (e.perf != null ? e.perf : '순번 ' + e.seq) + '</b>' + (e.attend === 'N' ? '<br>불참' : '') + '</td><td>' + App.piecesHTML(KC.piecesFor(e.p, s.round), { empty: '<span style="color:#888">곡목 미등록</span>', changed: PCHG(e.p.id, s.round) }) + '</td></tr>').join('') + '</tbody></table></div>');
   }
   if (kind === 'slip') App.printHTML(slipPages([PSES]));
   if (kind === 'paper') {

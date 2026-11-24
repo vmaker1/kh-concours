@@ -311,7 +311,7 @@ var App = (function () {
     opts = opts || {};
     if (!list || !list.length) return opts.empty || '';
     var mark = '①②③④⑤⑥';
-    return '<ol class="pcs' + (opts.cls ? ' ' + opts.cls : '') + '">' + list.map(function (x, i) {
+    return (opts.changed ? '<span class="pchg">곡목 변경</span>' : '') + '<ol class="pcs' + (opts.cls ? ' ' + opts.cls : '') + '">' + list.map(function (x, i) {
       return '<li><span class="pn">' + mark.charAt(i) + '</span><span>' + (x.kind ? '<em>' + esc(x.kind) + (x.country ? ' · ' + esc(x.country) : '') + '</em> ' : (x.country ? '<em>' + esc(x.country) + '</em> ' : '')) +
         (x.composer ? '<b>' + esc(x.composer) + '</b> ' : '') + esc(x.title) + '</span></li>';
     }).join('') + '</ol>';
@@ -421,6 +421,50 @@ var App = (function () {
       if (!b) return null; var u = new Uint8Array(b), s = ''; for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); SEAL = btoa(s); return SEAL;
     }).catch(function () { return null; });
   }
+  /* ---------- 곡목 바로 고치기 (현장·관리자 공용) ----------
+   * opts: { name, roundName, pieces, log:[{time,actor,before,after,note}], by, needBy, onSave(pieces, note, by) → Promise }
+   * 순서는 ↑↓, 곡명·작곡가는 칸에서 바로, 줄 추가·삭제. 저장하면 바뀌기 전·후가 수정 기록에 남아요 */
+  function piecesEditor(opts) {
+    var P = (opts.pieces || []).map(function (x) { return { kind: x.kind || '', country: x.country || '', composer: x.composer || '', title: x.title || '' }; });
+    var mark = '①②③④⑤⑥', orig = JSON.stringify(P);
+    var m = modal('<h2 style="margin-bottom:2px">곡목 고치기</h2><p class="small muted" style="margin-top:0"><b>' + esc(opts.name || '') + '</b> · ' + esc(opts.roundName || '') + ' — 위에서부터 연주(심사) 순서예요. ↑↓로 순서를 바꾸고, 칸을 눌러 바로 고쳐요.</p>' +
+      '<div id="pq"></div><button type="button" class="sm" id="pqa" style="margin-top:6px">+ 곡 추가</button>' +
+      '<div class="grid g2" style="gap:10px;margin-top:12px"><div><label class="f" for="pqn">바꾼 이유 <span class="small muted">(선택)</span></label><input id="pqn" placeholder="예: 현장에서 본인 확인 — 2곡 순서 바꿈"><div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">' + ['현장 확인', '본인 요청', '신청서 오타'].map(function (t) { return '<button type="button" class="sm" data-pqt="' + t + '">' + t + '</button>'; }).join('') + '</div></div>' +
+      '<div><label class="f" for="pqb">수정한 사람' + (opts.needBy ? ' <span class="small" style="color:var(--bad)">*</span>' : '') + '</label><input id="pqb" value="' + esc(opts.by || '') + '" placeholder="이름 (수정 기록에 남아요)"></div></div>' +
+      '<div id="pql"></div>' +
+      '<div class="row end" style="margin-top:12px"><button type="button" data-close>닫기</button><button class="pri" id="pqs">저장</button></div>', { wide: true });
+    var box = $('#pq', m.el);
+    function draw() {
+      box.innerHTML = P.map(function (x, i) {
+        return '<div class="pqr" data-i="' + i + '"><span class="pqn">' + mark.charAt(i) + '</span>' +
+          '<input data-k="title" value="' + esc(x.title) + '" placeholder="곡명" aria-label="' + (i + 1) + '번째 곡명">' +
+          '<input data-k="composer" value="' + esc(x.composer) + '" placeholder="작곡가" aria-label="' + (i + 1) + '번째 작곡가">' +
+          '<input data-k="kind" value="' + esc(x.kind) + '" placeholder="구분 (예: 아리아)" aria-label="' + (i + 1) + '번째 구분">' +
+          '<span class="pqb"><button type="button" class="sm" data-u="' + i + '"' + (i ? '' : ' disabled') + ' aria-label="위로">↑</button><button type="button" class="sm" data-d="' + i + '"' + (i < P.length - 1 ? '' : ' disabled') + ' aria-label="아래로">↓</button><button type="button" class="sm danger" data-x="' + i + '" aria-label="삭제">✕</button></span></div>';
+      }).join('') || '<p class="muted small">곡목이 없어요. [+ 곡 추가]로 넣어 주세요.</p>';
+      $$('[data-k]', box).forEach(function (inp) { inp.addEventListener('input', function () { P[+inp.closest('.pqr').dataset.i][inp.dataset.k] = inp.value; }); });
+      $$('[data-u]', box).forEach(function (b) { b.addEventListener('click', function () { var i = +b.dataset.u, t = P[i]; P[i] = P[i - 1]; P[i - 1] = t; draw(); }); });
+      $$('[data-d]', box).forEach(function (b) { b.addEventListener('click', function () { var i = +b.dataset.d, t = P[i]; P[i] = P[i + 1]; P[i + 1] = t; draw(); }); });
+      $$('[data-x]', box).forEach(function (b) { b.addEventListener('click', function () { P.splice(+b.dataset.x, 1); draw(); }); });
+    }
+    draw();
+    var log = opts.log || [];
+    $('#pql', m.el).innerHTML = log.length ? '<h3 style="margin:14px 0 6px;font-size:15px">수정 기록</h3><div class="scroll"><table class="small"><thead><tr><th>언제</th><th>누가</th><th>바꾸기 전 → 후</th><th>메모</th></tr></thead><tbody>' +
+      log.map(function (h) { return '<tr><td style="white-space:nowrap">' + esc(String(h.time || '').slice(5, 16)) + '</td><td>' + esc(h.actor) + '</td><td><span class="muted">' + esc(h.before || '(없음)') + '</span><br>→ <b>' + esc(h.after || '(없음)') + '</b></td><td>' + esc(h.note) + '</td></tr>'; }).join('') + '</tbody></table></div>' : '';
+    $('#pqa', m.el).addEventListener('click', function () { if (P.length >= 6) { toast('곡은 6곡까지예요', 'bad'); return; } P.push({ kind: '', country: '', composer: '', title: '' }); draw(); var ins = $$('[data-k="title"]', box); if (ins.length) ins[ins.length - 1].focus(); });
+    $$('[data-pqt]', m.el).forEach(function (b) { b.addEventListener('click', function () { var n = $('#pqn', m.el); n.value = n.value ? n.value + ' · ' + b.dataset.pqt : b.dataset.pqt; }); });
+    $('#pqs', m.el).addEventListener('click', function (e) {
+      var list = P.filter(function (x) { return x.title.trim() || x.composer.trim(); });
+      if (list.some(function (x) { return !x.title.trim(); })) { toast('곡명이 비어 있는 줄이 있어요', 'bad'); return; }
+      if (JSON.stringify(list) === orig) { m.close(); toast('바뀐 것이 없어요'); return; }
+      var by = $('#pqb', m.el).value.trim();
+      if (opts.needBy && !by) { toast('수정한 사람 이름을 적어 주세요 (수정 기록에 남아요)', 'bad'); $('#pqb', m.el).focus(); return; }
+      busy(e.target, true);
+      Promise.resolve(opts.onSave(list, $('#pqn', m.el).value.trim(), by)).then(function () { m.close(); }).catch(function (err) { busy(e.target, false); toast(err.message || String(err), 'bad'); });
+    });
+    return m;
+  }
+
   /* 워드(.docx)로 받기 — 데모·비상용. 직인은 '견본' 그림 */
   function docxBlob(data) {
     if (typeof DF === 'undefined' || typeof JSZip === 'undefined') return Promise.reject(new Error('워드 만들기 도구(lib/jszip)가 없어요.'));
@@ -524,7 +568,7 @@ var App = (function () {
     normT: normT, DEMO: DEMO, PRACTICE: PRACTICE, practiceLink: practiceLink, endPractice: endPractice, api: api, getToken: getToken, setToken: setToken, resetDemo: resetDemo, store: store,
     $: $, $$: $$, esc: esc, toast: toast, modal: modal, confirmBox: confirmBox, busy: busy,
     fmtDate: fmtDate, fmtBirth: fmtBirth, phone4: phone4, fmtPhone: fmtPhone, today: today, applyTheme: applyTheme, demoBar: demoBar,
-    loginView: loginView, readWorkbook: readWorkbook, findHeaderRow: findHeaderRow, autoMap: autoMap, piecesFrom: piecesFrom, hasPieceColumns: hasPieceColumns, piecesHTML: piecesHTML,
+    loginView: loginView, readWorkbook: readWorkbook, findHeaderRow: findHeaderRow, autoMap: autoMap, piecesFrom: piecesFrom, hasPieceColumns: hasPieceColumns, piecesHTML: piecesHTML, piecesEditor: piecesEditor,
     FIELD_LABEL: FIELD_LABEL, writeXlsx: writeXlsx, printHTML: printHTML, qrSvg: qrSvg, receiptHTML: receiptHTML,
     downloadBlob: downloadBlob, b64ToBlob: b64ToBlob, fileToData: fileToData, docxDownload: docxDownload, docxBlob: docxBlob, loadScript: loadScript, previewDocx: previewDocx, printDocxPreview: printDocxPreview, sheetPreviewHTML: sheetPreviewHTML, sheetDownload: sheetDownload, slim: slim, myDocDownload: myDocDownload, safeName: safeName
   };

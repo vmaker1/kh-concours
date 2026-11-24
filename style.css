@@ -239,3 +239,15 @@ input.dn.bad, .drt input.bad { border-color: var(--bad); background: #fff5f5; co
 section.docx table { width: auto; font-size: inherit; background: none; }
 section.docx th, section.docx td { padding: 0 5.4pt; border-bottom: 0; text-align: inherit; vertical-align: top; background: none; }
 section.docx tbody tr:hover td { background: none; }
+
+/* 곡목 바로 고치기 */
+.pqr { display: grid; grid-template-columns: 26px minmax(0, 2.2fr) minmax(0, 1.2fr) minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.pqr .pqn { font-size: 20px; font-weight: 800; color: var(--accent); text-align: center; }
+.pqr input { min-height: 42px; font-size: 16px; }
+.pqr .pqb { display: flex; gap: 4px; }
+.pqr .pqb button { min-width: 40px; min-height: 40px; font-size: 16px; }
+@media (max-width: 720px) { .pqr { grid-template-columns: 26px 1fr auto; } .pqr input[data-k="title"] { grid-column: 2 / 4; } .pqr input[data-k="composer"], .pqr input[data-k="kind"] { grid-column: 2 / 4; } .pqr .pqb { grid-column: 2 / 4; grid-row: auto; justify-content: flex-end; } }
+.pchg { display: inline-block; font-size: 11px; font-weight: 800; color: #9a3412; background: #ffedd5; border-radius: 6px; padding: 1px 6px; margin-bottom: 2px; }
+.pr .pchg { font-size: 8pt; color: #000; background: none; border: 1px solid #000; padding: 0 3px; }
+.pcell { min-width: 230px; }
+.pcell .pcs { margin: 0 0 4px; }
