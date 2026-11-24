@@ -589,7 +589,7 @@ var FM = (function () {
       var f = {}; for (var k in data.fields) f[k] = data.fields[k]; for (k in sh.fields) f[k] = sh.fields[k];
       var head = (data.headers || []).map(function (h) { return h[0]; });
       var info = [f.부문, f.구분, f.조, f.날짜, f.시작시간 ? f.시작시간 + '~' + f.종료시간 : '', f.심사위원 ? '심사위원 ' + f.심사위원 : '', f.쪽].filter(Boolean).join('  ');
-      return { name: sh.name, aoa: [[f.대회명 + ' ' + (f.라운드 || '') + ' ' + data.name], [info], []].concat([head]).concat(sh.rows.map(function (r) { return (data.headers || []).map(function (h) { return h[1] ? r[h[1]] || '' : ''; }); })) };
+      return { name: sh.name, aoa: [[f.대회명 + ' ' + (f.라운드 && String(data.name).indexOf(f.라운드) !== 0 ? f.라운드 + ' ' : '') + data.name], [info], []].concat([head]).concat(sh.rows.map(function (r) { return (data.headers || []).map(function (h) { return h[1] ? r[h[1]] || '' : ''; }); })) };
     });
   }
 

@@ -1234,6 +1234,11 @@ var KC = (function () {
 
   def('saveGroups', 'admin', true, function (db, p) { db.upsert('Groups', p.groups || []); return true; });
 
+  // 성(姓) — 두 글자 성은 따로 봄
+  var SUR2 = ['남궁', '황보', '제갈', '선우', '독고', '사공', '서문', '동방', '어금', '망절', '장곡'];
+  function surnameOf(n) { n = s(n).replace(/\s/g, ''); if (!n) return ''; var two = n.slice(0, 2); return n.length > 2 && SUR2.indexOf(two) >= 0 ? two : n.charAt(0); }
+  function shuffle(a) { for (var k = a.length - 1; k > 0; k--) { var j = Math.floor(Math.random() * (k + 1)); var t = a[k]; a[k] = a[j]; a[j] = t; } return a; }
+
   def('generateSessions', 'admin', true, function (db, p) {
     var cfg = db.cfg(), round = p.round === 'R2' ? 'R2' : 'R1', gk = s(p.groupKey);
     if (!gk) fail('부문을 선택해 주세요.');
@@ -1251,10 +1256,13 @@ var KC = (function () {
       cand = db.t('Participants').filter(function (q) { return q.groupKey === gk && passIds[q.id] && isActive(q); });
     }
     if (!cand.length) fail(round === 'R1' ? '편성할 참가자가 없습니다. (입금확인된 참가자만 편성됩니다)' : '본선진출자가 없습니다. 예선 커트라인을 먼저 확정해 주세요.');
-    var order = p.order || 'name';
-    if (order === 'random') cand.sort(function () { return Math.random() - 0.5; });
-    else if (order === 'applied') cand.sort(function (a, b) { return cmpKo(a.appliedAt, b.appliedAt); });
-    else cand.sort(function (a, b) { return cmpKo(a.name, b.name) || cmpKo(a.birth, b.birth); });
+    // 조 나누는 방식 — mix(기본): 무작위로 섞되 같은 성씨가 한 조에 몰리지 않게 골고루, 조 안 순번은 가나다순
+    //                 name: 가나다순으로 차례로 / applied: 신청 순
+    var order = p.order === 'name' || p.order === 'applied' ? p.order : 'mix';
+    var byName = function (a, b) { return cmpKo(a.name, b.name) || cmpKo(a.birth, b.birth); };
+    if (order === 'applied') cand.sort(function (a, b) { return cmpKo(a.appliedAt, b.appliedAt); });
+    else if (order === 'name') cand.sort(byName);
+    else shuffle(cand);
 
     var slots = (p.slots || []).filter(function (x) { return s(x.date) && s(x.startTime); })
       .sort(function (a, b) { return cmpKo(normDate(a.date) + normTime(a.startTime), normDate(b.date) + normTime(b.startTime)); });
@@ -1297,11 +1305,30 @@ var KC = (function () {
         return;
       }
     });
-    // ② 나머지는 순서대로 남은 자리에
+    // ② 나머지
     var rest2 = cand.filter(function (q) { return !farIds[q.id]; }), ri = 0;
-    info.slice().sort(function (a, b) { return cmpKo(a.date, b.date) || a.st - b.st; }).forEach(function (a) {
-      while (a.members.length < a.cap && ri < rest2.length) a.members.push(rest2[ri++]);
-    });
+    if (order === 'mix') {
+      // 성씨별로 묶어 큰 묶음부터(묶음 안은 무작위) 한 명씩 — 그 성씨가 (정원 대비) 가장 적은 조, 같으면 빈자리가 많은 조, 그래도 같으면 무작위
+      var bySur = {}; rest2.forEach(function (q) { var k = surnameOf(q.name); (bySur[k] = bySur[k] || []).push(q); });
+      var packs = shuffle(Object.keys(bySur).map(function (k) { return bySur[k]; }));
+      packs.sort(function (a, b) { return b.length - a.length; });
+      packs.forEach(function (pk) {
+        pk.forEach(function (q) {
+          var sur = surnameOf(q.name), best = null, bk = null;
+          info.forEach(function (a) {
+            if (a.members.length >= a.cap) return;
+            var same = a.members.filter(function (m) { return surnameOf(m.name) === sur; }).length;
+            var key = [(same + 1) / a.cap, -(a.cap - a.members.length) / a.cap, Math.random()];
+            if (!bk || key[0] < bk[0] - 1e-9 || (Math.abs(key[0] - bk[0]) < 1e-9 && (key[1] < bk[1] - 1e-9 || (Math.abs(key[1] - bk[1]) < 1e-9 && key[2] < bk[2])))) { best = a; bk = key; }
+          });
+          if (best) best.members.push(q);
+        });
+      });
+    } else {
+      info.slice().sort(function (a, b) { return cmpKo(a.date, b.date) || a.st - b.st; }).forEach(function (a) {
+        while (a.members.length < a.cap && ri < rest2.length) a.members.push(rest2[ri++]);
+      });
+    }
     var sessions = [], entries = [], idx = 0;
     info.forEach(function (a) {
       var x = slots[a.i], i = a.i, sid = round + '-' + stamp + '-' + (i + 1);
@@ -1311,9 +1338,9 @@ var KC = (function () {
         date: a.date, drawTime: fromMin(a.st - lead), startTime: fromMin(a.st), endTime: a.endTime || fromMin(a.st + dur),
         venue: s(x.venue) || s(p.venue) || cfg.venue, perSec: String(a.per), locked: ''
       });
-      // 조 안에서는 원래 순서(이름순 등)를 유지
+      // 조 안 순번(출석부 순서): 신청 순이 아니면 가나다순
       var orderIx = {}; cand.forEach(function (q, k) { orderIx[q.id] = k; });
-      a.members.sort(function (m1, m2) { return orderIx[m1.id] - orderIx[m2.id]; }).forEach(function (q) {
+      a.members.sort(order === 'applied' ? function (m1, m2) { return orderIx[m1.id] - orderIx[m2.id]; } : byName).forEach(function (q) {
         idx++;
         entries.push({ entryId: round + '|' + q.id, round: round, pid: q.id, sessionId: sid, seq: String(idx), drawNo: '', attend: '', checkinAt: '', pass: '', note: '' });
       });
@@ -1321,8 +1348,8 @@ var KC = (function () {
     var oldSes = sessionsOf(db, round, gk).map(function (x) { return x.sessionId; });
     db.replaceWhere('Sessions', function (x) { return oldSes.indexOf(x.sessionId) >= 0; }, sessions);
     db.replaceWhere('Entries', function (e) { return e.round === round && oldIds[e.pid]; }, entries);
-    db.log('admin', 'generateSessions', { round: round, group: gk, sessions: sessions.length, people: n, far: farStat });
-    return { sessions: sessions.length, people: n, far: farStat };
+    db.log('admin', 'generateSessions', { round: round, group: gk, sessions: sessions.length, people: n, order: order, far: farStat });
+    return { sessions: sessions.length, people: n, order: order, far: farStat };
   });
 
   function eligibleOf(db, round, gk) {
@@ -1600,6 +1627,37 @@ var KC = (function () {
     db.upsert('Entries', upd);
     db.log('desk', 'autoDraw', p.sessionId + ' ' + upd.length + '명');
     return upd.length;
+  });
+
+  // 추첨번호 한꺼번에 입력 (관리자) — 종이 출석부에 적어 둔 번호를 옮겨 적고 연주순서를 정함
+  //  rows: [{ entryId, drawNo, absent }] · 번호는 1~조 인원, 조 안에서 겹치면 안 됨 · 번호가 있으면 출석, 불참이면 번호 비움
+  def('saveDraws', 'admin', true, function (db, p) {
+    var sid = s(p.sessionId), list = db.t('Entries').filter(function (x) { return x.sessionId === sid; });
+    if (!list.length) fail('조를 찾을 수 없습니다.');
+    var pm = db.pmap(), n = list.length, by = {}, fin = {}, upd = [], now = db.store.now();
+    list.forEach(function (e) { by[e.entryId] = e; fin[e.entryId] = { drawNo: s(e.drawNo), attend: s(e.attend) }; });
+    (p.rows || []).forEach(function (r) {
+      var e = by[s(r.entryId)]; if (!e) return;
+      var nm = (pm[e.pid] || {}).name || '', raw = s(r.drawNo), dn = '';
+      if (raw !== '') { var v = +raw; if (!(v >= 1 && v <= n && Math.floor(v) === v)) fail(nm + ': 추첨번호는 1~' + n + ' 사이 숫자로 넣어 주세요.'); dn = String(v); }
+      var at = s(e.attend);
+      if (r.absent) { at = 'N'; dn = ''; } else if (dn) at = 'Y'; else if (at === 'N') at = '';
+      fin[e.entryId] = { drawNo: dn, attend: at };
+      var o = { entryId: e.entryId, drawNo: dn, attend: at };
+      if (at === 'Y' && !s(e.checkinAt)) o.checkinAt = now;
+      if (dn !== s(e.drawNo) || at !== s(e.attend)) upd.push(o);
+    });
+    var seen = {};
+    Object.keys(fin).forEach(function (id) {
+      var dn = fin[id].drawNo; if (!dn) return;
+      var nm = (pm[by[id].pid] || {}).name || '';
+      if (seen[dn]) fail('추첨번호 ' + dn + '번이 ' + seen[dn] + ', ' + nm + ' 두 사람에게 들어갔어요.');
+      seen[dn] = nm;
+    });
+    if (upd.length) db.upsert('Entries', upd);
+    var drawn = Object.keys(seen).length, absent = Object.keys(fin).filter(function (id) { return fin[id].attend === 'N'; }).length;
+    db.log('admin', 'saveDraws', sid + ' ' + upd.length + '줄');
+    return { saved: upd.length, drawn: drawn, absent: absent, left: n - drawn - absent };
   });
 
   // 무대 진행: 지금 연주 중인 연주자 표시 → 순서판·심사위원 화면에 함께 보임
@@ -2337,7 +2395,7 @@ var KC = (function () {
 
   return {
     SCHEMA: SCHEMA, KEYS: KEYS, DEFAULT_CONFIG: DEFAULT_CONFIG, handle: handle,
-    matchDeposits: matchDeposits, normBirth: normBirth, normPhone: normPhone, isPaid: isPaid, isActive: isActive,
+    matchDeposits: matchDeposits, normBirth: normBirth, normPhone: normPhone, surnameOf: surnameOf, isPaid: isPaid, isActive: isActive,
     makeGroupKey: makeGroupKey, groupLabel: groupLabel, roundCfg: roundCfg, toMin: toMin, fromMin: fromMin,
     normDate: normDate, normTime: normTime, cmpKo: cmpKo, digits: digits, randToken: randToken,
     parsePieces: parsePieces, normPieces: normPieces, piecesFor: piecesFor, pieceLine: pieceLine, piecesText: piecesText,

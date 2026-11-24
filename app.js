@@ -169,6 +169,14 @@ var App = (function () {
     return (withYear ? m[1] + '년 ' : '') + (+m[2]) + '월 ' + (+m[3]) + '일(' + WD[dt.getDay()] + ')';
   }
   function fmtBirth(b) { b = String(b || ''); return b.length === 6 ? b.slice(0, 2) + '.' + b.slice(2, 4) + '.' + b.slice(4) : b; }
+  // 전화번호 보기 좋게: 01012345678 → 010-1234-5678, 0212345678 → 02-1234-5678
+  function fmtPhone(p) {
+    var d = String(p || '').replace(/\D/g, ''); if (!d) return '';
+    if (/^02/.test(d)) return d.length === 9 ? d.replace(/^(02)(\d{3})(\d{4})$/, '$1-$2-$3') : d.length === 10 ? d.replace(/^(02)(\d{4})(\d{4})$/, '$1-$2-$3') : d;
+    if (d.length === 11) return d.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1-$2-$3');
+    if (d.length === 10) return d.replace(/^(\d{3})(\d{3})(\d{4})$/, '$1-$2-$3');
+    return d;
+  }
   function phone4(p) { p = String(p || '').replace(/\D/g, ''); return p ? '***-' + p.slice(-4) : ''; }
   function today() { var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
 
@@ -325,7 +333,7 @@ var App = (function () {
   /* ---------- 인쇄 ---------- */
   function printHTML(html, opt) {
     var root = $('#print-root'); if (!root) { root = document.createElement('div'); root.id = 'print-root'; document.body.appendChild(root); }
-    root.innerHTML = (opt && opt.landscape ? '<style>@media print { @page { size: A4 landscape; margin: 10mm; } }</style>' : '') + html;
+    root.innerHTML = (opt && opt.landscape ? '<style>@media print { @page { size: A4 landscape; margin: 20mm; } }</style>' : '') + html;
     setTimeout(function () { window.print(); }, 120);
   }
   function qrSvg(text, cell) {
@@ -414,14 +422,70 @@ var App = (function () {
     }).catch(function () { return null; });
   }
   /* 워드(.docx)로 받기 — 데모·비상용. 직인은 '견본' 그림 */
-  function docxDownload(data, name) {
+  function docxBlob(data) {
     if (typeof DF === 'undefined' || typeof JSZip === 'undefined') return Promise.reject(new Error('워드 만들기 도구(lib/jszip)가 없어요.'));
     return Promise.all([fetch('templates/' + data.file).then(function (r) { if (!r.ok) throw new Error('양식 파일을 찾지 못했어요: ' + data.file); return r.arrayBuffer(); }), data.seal ? sampleSeal() : null])
       .then(function (x) {
         var images = {}; if (x[1] && data.seal) { images.직인 = Object.assign({ data: x[1] }, data.seal); }
         if (data.lines) return DF.linesDocx(x[0], data, { type: 'blob' });
         return DF.fill(x[0], { fields: data.fields, pages: data.pages, images: images }, { type: 'blob' });
-      }).then(function (blob) { downloadBlob(blob, safeName(name || data.title) + '.docx'); });
+      });
+  }
+  function docxDownload(data, name) {
+    return docxBlob(data).then(function (blob) { downloadBlob(blob, safeName(name || data.title) + '.docx'); });
+  }
+
+  /* ---------- 출력물 미리보기·인쇄 (문서·출력 탭) ---------- */
+  var SCRIPTS = {};
+  function loadScript(src) {
+    if (!SCRIPTS[src]) SCRIPTS[src] = new Promise(function (res, rej) { var x = document.createElement('script'); x.src = src; x.onload = res; x.onerror = function () { delete SCRIPTS[src]; rej(new Error('미리보기 도구를 불러오지 못했어요: ' + src)); }; document.head.appendChild(x); });
+    return SCRIPTS[src];
+  }
+  // 워드 양식을 채운 그대로 화면에 그림 (docx-preview, Apache-2.0). 직인 견본 등 그림은 data URL로 넣어 인쇄에도 그대로
+  function previewDocx(data, el) {
+    return Promise.all([docxBlob(data), loadScript('lib/docx-preview.min.js')]).then(function (x) {
+      el.innerHTML = '';
+      return window.docx.renderAsync(x[0], el, el, { className: 'docx', inWrapper: true, breakPages: true, ignoreLastRenderedPageBreak: true, renderHeaders: true, renderFooters: true, useBase64URL: true, experimental: true });
+    });
+  }
+  // 미리보기를 그대로 인쇄 — 쪽 크기·여백은 워드 양식 그대로(양식마다 정해 둔 여백)
+  function printDocxPreview(el) {
+    // 글꼴 차이로 한 장짜리 양식이 조금 넘치면(15% 이내) 그 장만 살짝 줄여 한 장에 — 빈 쪽이 끼지 않게
+    var fit = $$('section.docx', el).map(function (sec) {
+      var mh = parseFloat(getComputedStyle(sec).minHeight) || 0, h = sec.getBoundingClientRect().height;
+      if (!mh || h / mh >= 1.15) return null;               // 원래 여러 장인 내용은 그대로 흘려 보냄
+      return { h: mh - 2, zoom: h > mh + 1 ? (mh / h * 0.99).toFixed(4) : '' };   // 한 장에 딱 맞춤(넘치면 살짝 줄임)
+    });
+    var css = '<style>@media print { @page { size: A4; margin: 0; } }' +
+      '#print-root .docx-wrapper { background: none !important; padding: 0 !important; display: block !important; }' +
+      '#print-root section.docx { box-shadow: none !important; margin: 0 auto !important; min-height: 0 !important; break-after: page; page-break-after: always; overflow: hidden; }' +
+      '#print-root section.docx:last-of-type { break-after: auto; page-break-after: auto; }</style>';
+    printHTML(css + el.innerHTML);
+    $$('#print-root section.docx').forEach(function (sec, i) {
+      var f = fit[i]; if (!f) return;
+      if (f.zoom) sec.style.zoom = f.zoom;
+      sec.style.setProperty('height', (f.zoom ? f.h / f.zoom : f.h) + 'px', 'important'); sec.style.setProperty('overflow', 'hidden', 'important');
+    });
+  }
+  // 시트 출력물 → 탭마다 표 한 쪽 (열이 많으면 가로). 제목 줄 · 안내 줄 · 빈 줄 · 머리줄 · 내용
+  function sheetPreviewHTML(data) {
+    var list = FM.toAOA(data);
+    return list.map(function (x) {
+      var a = x.aoa.slice(), top = [];
+      while (a.length && (a[0] || []).length <= 1) { var t = (a.shift() || [])[0]; if (t) top.push(String(t)); }
+      var head = a.shift() || [], cols = Math.max(head.length, a.reduce(function (m, r) { return Math.max(m, (r || []).length); }, 0));
+      // 가로·세로: 열마다 가장 긴 글자 수(최대 24)를 더해 대략의 폭을 봄
+      var est = 0; for (var ci = 0; ci < cols; ci++) { var w = String(head[ci] == null ? '' : head[ci]).length; a.slice(0, 80).forEach(function (r) { w = Math.max(w, String(r && r[ci] != null ? r[ci] : '').length); }); est += Math.min(24, w) + 2; }
+      var wide = est > 72;
+      var tbl = function (rows) {
+        return '<table><thead><tr>' + head.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+          rows.map(function (r) { var c = []; for (var i = 0; i < cols; i++) c.push('<td>' + esc(r && r[i] != null ? r[i] : '') + '</td>'); return '<tr>' + c.join('') + '</tr>'; }).join('') + '</tbody></table>';
+      };
+      // 열이 적고 줄이 많은 표(예선 채점표 60칸 등)는 한 장에 두 단으로
+      var two = !wide && cols <= 5 && a.length > 32 && a.length <= 70, half = Math.ceil(a.length / 2);
+      return '<div class="pg pr shp' + (wide ? ' land' : '') + (two ? ' two' : a.length > 24 ? ' compact' : '') + '">' + (top[0] ? '<h1>' + esc(top[0]) + '</h1>' : '') + '<div class="meta"><span>' + esc(top.slice(1).join(' · ')) + '</span><span>' + esc(x.name) + '</span></div>' +
+        (two ? '<div class="cols2">' + tbl(a.slice(0, half)) + tbl(a.slice(half)) + '</div>' : tbl(a)) + '</div>';
+    }).join('');
   }
   function sheetDownload(data, name) {
     var list = FM.toAOA(data);
@@ -457,9 +521,9 @@ var App = (function () {
     brandHTML: brandHTML,
     normT: normT, DEMO: DEMO, PRACTICE: PRACTICE, practiceLink: practiceLink, endPractice: endPractice, api: api, getToken: getToken, setToken: setToken, resetDemo: resetDemo, store: store,
     $: $, $$: $$, esc: esc, toast: toast, modal: modal, confirmBox: confirmBox, busy: busy,
-    fmtDate: fmtDate, fmtBirth: fmtBirth, phone4: phone4, today: today, applyTheme: applyTheme, demoBar: demoBar,
+    fmtDate: fmtDate, fmtBirth: fmtBirth, phone4: phone4, fmtPhone: fmtPhone, today: today, applyTheme: applyTheme, demoBar: demoBar,
     loginView: loginView, readWorkbook: readWorkbook, findHeaderRow: findHeaderRow, autoMap: autoMap, piecesFrom: piecesFrom, hasPieceColumns: hasPieceColumns, piecesHTML: piecesHTML,
     FIELD_LABEL: FIELD_LABEL, writeXlsx: writeXlsx, printHTML: printHTML, qrSvg: qrSvg, receiptHTML: receiptHTML,
-    downloadBlob: downloadBlob, b64ToBlob: b64ToBlob, fileToData: fileToData, docxDownload: docxDownload, sheetDownload: sheetDownload, slim: slim, myDocDownload: myDocDownload, safeName: safeName
+    downloadBlob: downloadBlob, b64ToBlob: b64ToBlob, fileToData: fileToData, docxDownload: docxDownload, docxBlob: docxBlob, loadScript: loadScript, previewDocx: previewDocx, printDocxPreview: printDocxPreview, sheetPreviewHTML: sheetPreviewHTML, sheetDownload: sheetDownload, slim: slim, myDocDownload: myDocDownload, safeName: safeName
   };
 })();

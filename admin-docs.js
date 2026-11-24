@@ -138,9 +138,9 @@ var ADMX = (function () {
       '<div class="row" style="margin-top:14px;flex-wrap:wrap">' +
       (F.type === 'doc' && !App.DEMO ? '<label class="small row" style="gap:6px"><input type="checkbox" id="bsplit" style="width:18px;height:18px;min-height:0" ' + (/^(gonggyeol|contract|pledge|judge_agree)$/.test(kind) ? 'checked' : '') + '>사람별 파일로 (본인이 PDF로 받음)</label><label class="small row" style="gap:6px"><input type="checkbox" id="bpdf" style="width:18px;height:18px;min-height:0" checked>PDF도</label>' : '') +
       (F.series || /^(contract|pledge|judge_agree)$/.test(kind) ? '<label class="small row" style="gap:6px"><input type="checkbox" id="breg" style="width:18px;height:18px;min-height:0" checked>발급대장에 기록</label>' : '') +
-      '<span class="sp"></span><button data-close>닫기</button>' +
+      '<span class="sp"></span><button data-close>닫기</button><button class="pri" id="bpv">미리보기·인쇄</button>' +
       (F.type === 'doc' ? '<button id="bdocx">워드(.docx)로 받기</button>' : '<button id="bxls">엑셀로 받기</button>') +
-      (!App.DEMO ? '<button class="pri" id="bgo">' + (F.type === 'doc' ? '구글 문서로 만들기' : '구글 시트로 만들기') + '</button>' : '') + '</div>' +
+      (!App.DEMO ? '<button id="bgo">' + (F.type === 'doc' ? '구글 문서로 만들기' : '구글 시트로 만들기') + '</button>' : '') + '</div>' +
       (/^pay_/.test(kind) ? '<div class="note small" style="margin-top:10px">구글 시트·엑셀에는 주민번호·계좌가 <b>가려서</b> 나가요. 송금·원천징수 신고에 쓸 원문은 <b>인력·지급</b> 탭의 ‘' + (kind === 'pay_staff' ? '인사팀 제출용' : '지급용 원문') + '’으로 받으세요 (키 비밀번호 필요, 내 컴퓨터에만 저장).</div>' : '');
     var m = modal(h, { wide: true });
     var data = null;
@@ -183,6 +183,16 @@ var ADMX = (function () {
         .catch(function (e) { onErr(e); }).finally(function () { busy(bd, false); });
     });
     var bx = $('#bxls', m.el); if (bx) bx.addEventListener('click', function () { if (!data || !data.count) return toast('만들 내용이 없어요', 'bad'); try { App.sheetDownload(data); } catch (e) { toast(e.message, 'bad'); } });
+    // 미리보기·인쇄: 번호가 붙는 문서는 '인쇄'를 누를 때 발급대장에 한 번만 기록
+    $('#bpv', m.el).addEventListener('click', function () {
+      if (!data || !data.count) return toast('만들 내용이 없어요', 'bad');
+      var d0 = data, willReg = !!(reg() && d0.register && d0.register.length);
+      openPreview(d0, F, willReg, function () {
+        if (!willReg || d0.__reg) return Promise.resolve();
+        return call('registerDocs', { items: d0.register.map(function (r) { return { kind: r.kind, series: r.series, docNo: r.docNo, title: r.title, target: r.target, refId: r.refId, reqId: r.reqId, fields: r.fields }; }) })
+          .then(function () { d0.__reg = true; toast('발급대장에 ' + d0.register.length + '건 기록했어요', 'ok'); A().refresh(); });
+      });
+    });
     var bg = $('#bgo', m.el); if (bg) bg.addEventListener('click', function () {
       if (!data || !data.count) return toast('만들 내용이 없어요', 'bad');
       busy(bg, true);
@@ -190,6 +200,27 @@ var ADMX = (function () {
       call('gas.export', { data: App.slim(data), register: !!reg(), split: !!(sp && sp.checked), pdf: !!(pd && pd.checked) })
         .then(function (r) { m.close(); showFiles(r, data); if (reg()) A().refresh(); })
         .catch(function (e) { busy(bg, false); onErr(e); });
+    });
+  }
+  // 출력물 미리보기 — 워드 양식은 채운 모양 그대로, 시트는 탭마다 표 한 쪽. 여기서 바로 인쇄
+  function openPreview(data, F, willReg, beforePrint) {
+    var isDoc = F.type === 'doc';
+    var pm = modal('<div class="pvh"><h2>' + esc(F.name) + ' 미리보기</h2><span class="small muted">' + esc(data.title) + ' · ' + data.count + (isDoc ? '장' : '개 탭') + '</span><span class="sp"></span>' +
+      (willReg ? '<span class="small muted">인쇄하면 발급대장에 기록돼요</span>' : '') +
+      '<button class="pri" id="pvp" disabled>인쇄</button><button id="pvd">' + (isDoc ? '워드로 받기' : '엑셀로 받기') + '</button><button data-close>닫기</button></div>' +
+      '<div class="pvb" id="pvb"><div class="loading" style="color:#fff">미리보기를 만드는 중…</div></div>', { wide: true });
+    pm.el.classList.add('pv');
+    var body = $('#pvb', pm.el), pr = $('#pvp', pm.el);
+    if (isDoc) App.previewDocx(data, body).then(function () { pr.disabled = false; }).catch(function (e) { body.innerHTML = '<div class="note bad">' + esc(e.message) + '</div>'; });
+    else { body.innerHTML = App.sheetPreviewHTML(data); pr.disabled = false; }
+    pr.addEventListener('click', function () {
+      busy(pr, true);
+      beforePrint().then(function () { if (isDoc) App.printDocxPreview(body); else App.printHTML(App.sheetPreviewHTML(data)); })
+        .catch(onErr).finally(function () { busy(pr, false); });
+    });
+    $('#pvd', pm.el).addEventListener('click', function () {
+      if (isDoc) App.docxDownload(data).then(function () { toast('워드 파일을 받았어요', 'ok'); }).catch(onErr);
+      else try { App.sheetDownload(data); } catch (e) { toast(e.message, 'bad'); }
     });
   }
   function showFiles(r, data) {
