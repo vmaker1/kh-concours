@@ -574,13 +574,51 @@ function drawPay() {
 }
 
 /* ================= 조편성·시간표 ================= */
+// 옮긴 조 목록 (편성 뒤 자동 맞춤 · 시각 맞추기 결과)
+function movedNote(list) {
+  if (!list || !list.length) return '';
+  return '<div class="note warn small" style="margin-top:10px">같은 날 조가 겹쳐서 <b>' + list.length + '개 조</b>의 시각을 뒤로 옮겼어요 (시간 점검 기준).<ul style="margin:4px 0 0 18px;padding:0">' +
+    list.slice(0, 30).map(x => '<li>' + esc(fmtDate(x.date)) + ' ' + esc(GL(x.groupKey)) + ' ' + esc(x.label) + ': ' + esc(x.from) + ' → <b>' + esc(x.to) + '</b></li>').join('') + (list.length > 30 ? '<li>…</li>' : '') + '</ul></div>';
+}
+// 이 날 시각 맞추기 — 미리 보고 적용. 부문 순서를 바꾸면 '처음부터 다시 짜기'로
+function retimeDialog(key) {
+  const [r, date] = key.split('|');
+  const cnt = {}; D.entries.forEach(e => { cnt[e.sessionId] = (cnt[e.sessionId] || 0) + 1; });
+  const list = D.sessions.filter(x => x.round === r && x.date === date).map(x => ({ sessionId: x.sessionId, groupKey: x.groupKey, no: x.no, label: x.label, startTime: x.startTime, endTime: x.endTime, perSec: x.perSec, count: cnt[x.sessionId] || 0 }));
+  const day = planDays(r).find(x => x.date === date) || null;
+  let order = null, pack = false;
+  const m = modal('<h2>' + esc(fmtDate(date, true)) + ' 시각 맞추기</h2><div id="rtb"></div><div class="row end" style="margin-top:12px"><button data-close>취소</button><button class="pri" id="rtgo">이대로 적용</button></div>', { wide: true });
+  const draw = () => {
+    const res = KC.retimeDay(D.cfg, list, day, { order, pack });
+    const gks = []; res.items.forEach(i => { if (!gks.includes(i.groupKey)) gks.push(i.groupKey); });
+    if (!order) order = gks.slice();
+    const before = {}; list.forEach(x => before[x.sessionId] = x);
+    $('#rtb', m.el).innerHTML =
+      '<p class="small muted">조 길이는 <b>지금 인원 × 1인 시간</b>으로 다시 계산하고, 조 사이·점심은 ' + (day ? '그날 시간표 계획' : '설정 기본값') + '대로 넣어요. 채점이 시작된 날은 바꾸지 않아요.</p>' +
+      '<div class="row" style="gap:16px;flex-wrap:wrap;margin:8px 0"><label class="inline"><input type="radio" name="rtm" value="push"' + (!pack ? ' checked' : '') + '> 겹치는 조만 뒤로 밀기 <span class="small muted">(지금 시각을 최대한 그대로)</span></label><label class="inline"><input type="radio" name="rtm" value="pack"' + (pack ? ' checked' : '') + '> 아래 순서로 처음부터 빈틈없이 다시 짜기</label></div>' +
+      (gks.length > 1 ? '<div class="panel" style="margin-bottom:10px"><b class="small">부문 순서</b> <span class="small muted">— 바꾸면 \'처음부터 다시 짜기\'로 계산해요</span><div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px">' + order.map((gk, i) => '<span class="chip" style="display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:3px 6px 3px 10px">' + (i + 1) + '. ' + esc(GL(gk)) + (i ? '<button class="sm" data-up="' + i + '" aria-label="앞으로">↑</button>' : '') + (i < order.length - 1 ? '<button class="sm" data-dn="' + i + '" aria-label="뒤로">↓</button>' : '') + '</span>').join('') + '</div></div>' : '') +
+      '<div class="scroll"><table><thead><tr><th>부문 · 조</th><th class="n">인원</th><th>지금</th><th>바꾸면</th></tr></thead><tbody>' +
+      res.items.map(i => { const b = before[i.sessionId]; const ch = i.start !== KC.normTime(b.startTime) || i.end !== KC.normTime(b.endTime); return '<tr' + (ch ? ' style="background:#fff8e6"' : '') + '><td>' + esc(GL(i.groupKey)) + ' ' + esc(i.label) + '</td><td class="n">' + i.n + '</td><td class="small">' + esc(b.startTime) + '~' + esc(b.endTime) + '</td><td>' + (ch ? '<b>' + i.start + '~' + i.end + '</b>' : '<span class="muted">' + i.start + '~' + i.end + '</span>') + '</td></tr>'; }).join('') + '</tbody></table></div>' +
+      (res.warn.length ? '<div class="note warn small" style="margin-top:8px">' + res.warn.map(esc).join('<br>') + '</div>' : '') +
+      (() => { const w = KC.checkTimes(D.cfg, res.items.map(i => ({ start: i.start, end: i.end, label: GL(i.groupKey) + ' ' + i.label })), { skipGap: true, amEnd: day && day.amEnd ? KC.toMin(day.amEnd) : null, pmStart: day && day.pmStart ? KC.toMin(day.pmStart) : null, lunchMin: day ? +day.lunchMin || 0 : 0 }).filter(x => /겹쳐요/.test(x)); return w.length ? '<div class="note bad small">' + w.map(esc).join('<br>') + '</div>' : '<div class="note ok small" style="margin-top:8px">바꾸면 겹치는 조가 없어요. 끝나는 시각 ' + esc(res.end) + '</div>'; })();
+    $$('[name=rtm]', m.el).forEach(x => x.addEventListener('change', () => { pack = x.value === 'pack'; draw(); }));
+    $$('[data-up]', m.el).forEach(b => b.addEventListener('click', () => { const i = +b.dataset.up; [order[i - 1], order[i]] = [order[i], order[i - 1]]; pack = true; draw(); }));
+    $$('[data-dn]', m.el).forEach(b => b.addEventListener('click', () => { const i = +b.dataset.dn; [order[i + 1], order[i]] = [order[i], order[i + 1]]; pack = true; draw(); }));
+  };
+  draw();
+  $('#rtgo', m.el).addEventListener('click', e => {
+    busy(e.target, true);
+    call('retimeSessions', { round: r, date, order, pack }).then(mv => { m.close(); toast(mv.length ? mv.length + '개 조 시각을 맞췄어요' : '바꿀 시각이 없었어요', 'ok'); refresh(); }).catch(err => { busy(e.target, false); onErr(err); });
+  });
+}
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-rt]'); if (b) retimeDialog(b.dataset.rt); });
 // 실제 조 시간 점검 — 손으로 고친 시각까지: 겹침 · 쉬는 시간 부족 · 점심 없음/짧음 · 늦게 끝남 · (설정 시) 쉬지 않고 너무 오래
 function timeCheckCard(r) {
   const ses = D.sessions.filter(s => s.round === r); if (!ses.length) return '';
   const W = KC.checkSessions(D.cfg, ses, D.plan), ks = Object.keys(W).sort();
   if (!ks.length) return '<div class="note ok small" style="margin:12px 0">시간 점검: 날짜마다 조 사이 쉬는 시간(최소 ' + esc(D.cfg.minGap || 5) + '분)·점심(최소 ' + esc(D.cfg.lunchMin || 60) + '분)·겹침·끝나는 시각 모두 괜찮아요.</div>';
-  return '<div class="card"><h2>시간 점검 <span class="badge warn">' + ks.reduce((a, k) => a + W[k].length, 0) + '</span></h2><p class="small muted">조 시각을 손으로 고쳤거나 사람을 옮겨 조 인원이 바뀌었을 때 확인해 주세요. 기준은 설정 › 시간표 기본값.</p>' +
-    ks.map(k => '<div style="margin-top:8px"><b>' + esc(fmtDate(k.split('|')[1], true)) + '</b><ul style="margin:4px 0 0 18px;padding:0">' + W[k].map(w => '<li>' + esc(w) + '</li>').join('') + '</ul></div>').join('') + '</div>';
+  return '<div class="card"><h2>시간 점검 <span class="badge warn">' + ks.reduce((a, k) => a + W[k].length, 0) + '</span></h2><p class="small muted">조 시각을 손으로 고쳤거나 사람을 옮겨 조 인원이 바뀌었을 때, 또는 두 부문이 같은 시각에 잡혔을 때 생겨요. 겹치는 날은 <b>[이 날 시각 맞추기]</b>로 미리 보고 한 번에 고칠 수 있어요. 기준은 그날 시간표 계획(없으면 설정 › 시간표 기본값).</p>' +
+    ks.map(k => '<div style="margin-top:8px"><div class="row" style="gap:8px"><b>' + esc(fmtDate(k.split('|')[1], true)) + '</b>' + (W[k].some(w => /겹쳐요|점심시간에 걸친/.test(w)) ? '<button class="sm pri" data-rt="' + esc(k) + '">이 날 시각 맞추기</button>' : '') + '</div><ul style="margin:4px 0 0 18px;padding:0">' + W[k].map(w => '<li>' + esc(w) + '</li>').join('') + '</ul></div>').join('') + '</div>';
 }
 function sched() {
   const r = ROUND, P = D.participants;
@@ -658,7 +696,7 @@ function genDialog(g) {
     '<div class="grid g2" style="gap:10px"><div><label class="f">1인 배당 시간(초)</label><input id="ps" inputmode="numeric" value="' + per + '"></div><div><label class="f">조 나누는 방식</label><select id="od"><option value="mix">골고루 섞기 — 같은 성씨가 한 조에 몰리지 않게 (권장)</option><option value="name">가나다순으로 차례로</option><option value="applied">신청 순</option></select></div></div>' +
     '<div class="panel" style="margin:12px 0"><div class="row" style="flex-wrap:wrap;gap:6px"><label class="f" style="margin:0">빠르게 채우기</label><input type="date" id="qd" style="width:160px" value="' + esc(g.gs[0] ? g.gs[0].date : planSes[0] ? planSes[0].date : '') + '"><input type="time" id="qt" style="width:120px" value="' + esc(pd0 ? pd0.start : '09:50') + '"><input id="qk" inputmode="numeric" style="width:70px" value="' + k + '" aria-label="조 수"><span class="small">개 조</span><button class="sm" id="qf">줄 만들기</button>' +
       (planSes.length ? '<span class="sp"></span><button class="sm" id="qp">계획대로 채우기</button>' : '') + '</div>' +
-      '<p class="small muted" style="margin:6px 0 0">날짜·시작·조 수를 바꾸면 아래 줄이 바로 다시 만들어져요. 시간표 계획과 같은 규칙(점심·' + esc(pd0 && +pd0.restEvery ? pd0.restEvery + '조마다 ' + (pd0.restMin || 10) + '분 쉬기' : '조 사이 ' + (D.cfg.sessionGap || 10) + '분') + ')으로 시각을 계산해요.</p></div>' +
+      '<p class="small" id="qhint" style="margin:6px 0 0;color:var(--accent)"></p><p class="small muted" style="margin:6px 0 0">날짜·시작·조 수를 바꾸면 아래 줄이 바로 다시 만들어져요. 시간표 계획과 같은 규칙(점심·' + esc(pd0 && +pd0.restEvery ? pd0.restEvery + '조마다 ' + (pd0.restMin || 10) + '분 쉬기' : '조 사이 ' + (D.cfg.sessionGap || 10) + '분') + ')으로 시각을 계산해요.</p></div>' +
     '<label class="f" for="sl">조마다 한 줄: 일자 시작시각 [인원] [장소]</label><textarea id="sl" rows="6" placeholder="빠르게 채우기에서 날짜를 고르면 여기 자동으로 채워져요.&#10;직접 쓸 때 예) 2026-12-10 09:50 9">' + esc(lines) + '</textarea>' +
     '<p class="small muted">인원을 비워 두면 남은 인원을 고르게 나눠요. 어떤 방식이든 조 안 순번(출석부)은 가나다순이에요. 다시 편성하면 이 부문의 기존 조와 추첨번호·출석이 지워집니다.</p>' +
     '<div class="row end"><button data-close>취소</button><button class="pri" id="go">편성 실행</button></div>');
@@ -672,6 +710,19 @@ function genDialog(g) {
     const res = KC.planDay(D.cfg, day), out = res.items.filter(i => i.type === 'session').map(i => d + ' ' + i.start + ' ' + i.n);
     $('#sl', m.el).value = out.join('\n'); return true;
   };
+  // 날짜를 고르면: 그날 다른 부문이 이미 있으면 그 뒤(오전에 자리가 없으면 점심 뒤)부터 시작하게
+  const afterOthers = () => {
+    const d = $('#qd', m.el).value; if (!d) return;
+    if (planSes.some(x => x.date === d)) return;
+    const oth = D.sessions.filter(x => x.round === ROUND && x.date === d && x.groupKey !== g.k && x.endTime); if (!oth.length) { $('#qhint', m.el).textContent = ''; return; }
+    const pd = planDays(ROUND).find(x => x.date === d) || {}, last = oth.reduce((a, x) => Math.max(a, KC.toMin(x.endTime)), 0);
+    const amEnd = KC.toMin(pd.amEnd || D.cfg.amEnd || '12:30'), pmStart = KC.toMin(pd.pmStart || D.cfg.pmStart || '13:30');
+    let st = last + (+pd.restMin || +D.cfg.sessionGap || 10);
+    if (st >= amEnd - 30 && st < pmStart) st = Math.max(last + (+pd.lunchMin || +D.cfg.lunchMin || 60), pmStart);
+    $('#qt', m.el).value = KC.fromMin(st);
+    $('#qhint', m.el).textContent = '이 날은 이미 다른 부문이 ' + KC.fromMin(last) + '까지 있어서 ' + KC.fromMin(st) + '부터 잡았어요.';
+  };
+  $('#qd', m.el).addEventListener('change', afterOthers);
   ['#qd', '#qt', '#qk', '#ps'].forEach(id => $(id, m.el).addEventListener('change', () => { if ($('#qd', m.el).value) quick(); }));
   $('#qf', m.el).addEventListener('click', () => { if (!quick()) toast('날짜를 먼저 골라 주세요', 'bad'); });
   const qp = $('#qp', m.el); if (qp) qp.addEventListener('click', () => { $('#sl', m.el).value = planLines; });
@@ -688,7 +739,7 @@ function genDialog(g) {
     const run = force => { busy(e.target, true); call('generateSessions', { round: ROUND, groupKey: g.k, slots, perSec: $('#ps', m.el).value, order: $('#od', m.el).value, farAfternoon: $('#far', m.el).checked, force }).then(r => {
       m.close(); toast(r.people + '명을 ' + r.sessions + '개 조로 편성했어요', 'ok');
       const f = r.far || {};
-      refresh().then(() => { if (f.lastSlot || f.morning) modal('<h2>지방 참가자 배치 확인</h2><p>지방 참가자 ' + f.total + '명 중 <b>' + f.preferred + '명</b>은 오후 조(마지막 조 제외)에 넣었어요.</p>' + (f.lastSlot ? '<p class="note warn">' + f.lastSlot + '명은 오후 조 자리가 모자라 <b>그날 마지막 조</b>에 들어갔어요.</p>' : '') + (f.morning ? '<p class="note warn">' + f.morning + '명은 오후 조가 없거나 모자라 <b>오전 조</b>에 들어갔어요.</p>' : '') + '<p class="small muted">편성 줄에 인원을 직접 적으면(예: <code>2027-03-24 13:00 24</code>) 오후 첫 조를 키울 수 있어요. 또는 \'명단\'에서 한 명씩 다른 조로 옮길 수 있어요.</p><div class="row end"><button class="pri" data-close>확인</button></div>'); });
+      refresh().then(() => { if (r.moved && r.moved.length) modal('<h2>같은 날 겹치지 않게 시각을 맞췄어요</h2>' + movedNote(r.moved) + '<div class="row end"><button class="pri" data-close>확인</button></div>'); if (f.lastSlot || f.morning) modal('<h2>지방 참가자 배치 확인</h2><p>지방 참가자 ' + f.total + '명 중 <b>' + f.preferred + '명</b>은 오후 조(마지막 조 제외)에 넣었어요.</p>' + (f.lastSlot ? '<p class="note warn">' + f.lastSlot + '명은 오후 조 자리가 모자라 <b>그날 마지막 조</b>에 들어갔어요.</p>' : '') + (f.morning ? '<p class="note warn">' + f.morning + '명은 오후 조가 없거나 모자라 <b>오전 조</b>에 들어갔어요.</p>' : '') + '<p class="small muted">편성 줄에 인원을 직접 적으면(예: <code>2027-03-24 13:00 24</code>) 오후 첫 조를 키울 수 있어요. 또는 \'명단\'에서 한 명씩 다른 조로 옮길 수 있어요.</p><div class="row end"><button class="pri" data-close>확인</button></div>'); });
     }).catch(err => { busy(e.target, false); if (/채점이 시작/.test(err.message)) confirmBox(err.message + '\n그래도 다시 편성할까요?', '다시 편성', true).then(ok => ok && run(true)); else onErr(err); }); };
     (g.gs.length ? confirmBox('기존 ' + g.gs.length + '개 조를 지우고 다시 편성할까요?', '다시 편성', true) : Promise.resolve(true)).then(ok => ok && run(false));
   });
@@ -698,8 +749,8 @@ function sessionList(sid) {
   const list = D.entries.filter(e => e.sessionId === sid).sort((a, b) => a.seq - b.seq);
   const others = D.sessions.filter(x => x.round === s.round && x.groupKey === s.groupKey && x.sessionId !== sid).concat(D.sessions.filter(x => x.round === s.round && x.groupKey !== s.groupKey));
   const m = modal('<h2>' + esc(GL(s.groupKey)) + ' ' + esc(s.label) + '</h2><p class="muted">' + esc(fmtDate(s.date, true)) + ' 추첨 ' + esc(s.drawTime) + ' · 시작 ' + esc(s.startTime) + ' · ' + list.length + '명</p>' +
-    '<div class="scroll mlist"><table><thead><tr><th class="n">순번</th><th>이름</th><th>학교</th><th class="c">추첨</th><th>출석</th><th>다른 조로 옮기기</th></tr></thead><tbody>' +
-    list.map(e => { const p = pk[e.pid]; return '<tr><td class="n">' + e.seq + '</td><td><b>' + esc(p.name) + '</b> <span class="small muted">' + esc(p.birth) + '</span>' + (p.region ? ' <span class="badge ' + (KC.isFar(D.cfg, p) ? 'warn' : '') + '">' + esc(p.region) + '</span>' : '') + '</td><td class="small">' + esc(p.school) + ' ' + esc(p.grade) + '</td><td class="c">' + esc(e.drawNo) + '</td><td>' + (e.attend === 'Y' ? '<span class="badge ok">출석</span>' : e.attend === 'N' ? '<span class="badge">불참</span>' : '') + '</td><td><select data-mv="' + esc(e.entryId) + '" style="min-height:34px;padding:4px 6px;font-size:14px"><option value="">—</option>' + others.map(o => '<option value="' + esc(o.sessionId) + '">' + esc(GL(o.groupKey)) + ' ' + esc(o.label) + ' ' + esc(fmtDate(o.date)) + '</option>').join('') + '</select></td></tr>'; }).join('') +
+    '<div class="scroll mlist"><table><thead><tr><th class="n">순번</th><th>이름</th><th>학교</th><th class="c">추첨번호</th><th class="c">연주순서</th><th>출석</th><th>다른 조로 옮기기</th></tr></thead><tbody>' +
+    list.map(e => { const p = pk[e.pid]; return '<tr><td class="n">' + e.seq + '</td><td><b>' + esc(p.name) + '</b> <span class="small muted">' + esc(p.birth) + '</span>' + (p.region ? ' <span class="badge ' + (KC.isFar(D.cfg, p) ? 'warn' : '') + '">' + esc(p.region) + '</span>' : '') + '</td><td class="small">' + esc(p.school) + ' ' + esc(p.grade) + '</td><td class="c">' + (e.drawNo ? drawOffset(s) + (+e.drawNo) : '') + '</td><td class="c">' + (e.drawNo ? esc(e.drawNo) + '번' : '') + '</td><td>' + (e.attend === 'Y' ? '<span class="badge ok">출석</span>' : e.attend === 'N' ? '<span class="badge">불참</span>' : '') + '</td><td><select data-mv="' + esc(e.entryId) + '" style="min-height:34px;padding:4px 6px;font-size:14px"><option value="">—</option>' + others.map(o => '<option value="' + esc(o.sessionId) + '">' + esc(GL(o.groupKey)) + ' ' + esc(o.label) + ' ' + esc(fmtDate(o.date)) + '</option>').join('') + '</select></td></tr>'; }).join('') +
     '</tbody></table></div><div class="row end" style="margin-top:12px"><button data-close>닫기</button></div>', { wide: true });
   $$('[data-mv]', m.el).forEach(sel => sel.addEventListener('change', () => { if (!sel.value) return; call('moveEntry', { entryId: sel.dataset.mv, sessionId: sel.value }).then(() => { toast('옮겼어요', 'ok'); m.close(); refresh().then(() => sessionList(sid)); }).catch(onErr); }));
 }
@@ -1021,14 +1072,16 @@ function bindPlan(r, days) {
     if (PED && PED.r === r && PED.dirty) { toast('고치고 있는 날짜를 먼저 저장하거나 닫아 주세요', 'bad'); $('#ped').scrollIntoView({ behavior: 'smooth' }); return; }
     const pa = KC.planAll(D.cfg, days), ks = Object.keys(pa.totals);
     if (!ks.length) { toast('계획에 부문이 없어요'); return; }
-    const lines = ks.map(k => { const need = eligibleN(k, r), pl = pa.totals[k]; return '<tr><td>' + esc(GL(k)) + '</td><td class="n">' + need + '</td><td class="n">' + pl + '</td><td>' + (need === pl ? '<span class="badge ok">편성</span>' : '<span class="badge bad">인원 안 맞음 — 건너뜀</span>') + '</td></tr>'; }).join('');
-    const m = modal('<h2>계획대로 조편성</h2><p class="small muted">인원이 맞는 부문만 편성해요. 조는 <b>골고루 섞어서</b>(무작위 · 같은 성씨가 한 조에 몰리지 않게) 나누고, 조 안 순번(출석부)은 가나다순이에요. 이미 편성된 부문은 다시 편성되고(추첨번호·출석 지워짐), 채점이 시작된 부문은 건너뜁니다.</p><div class="scroll"><table><thead><tr><th>부문</th><th class="n">대상</th><th class="n">계획</th><th></th></tr></thead><tbody>' + lines + '</tbody></table></div>' +
+    const tol = D.cfg.planAbsorb !== undefined && D.cfg.planAbsorb !== '' ? +D.cfg.planAbsorb : 2;
+    const lines = ks.map(k => { const need = eligibleN(k, r), pl = pa.totals[k], df = need - pl; return '<tr><td>' + esc(GL(k)) + '</td><td class="n">' + need + '</td><td class="n">' + pl + '</td><td>' + (!df ? '<span class="badge ok">편성</span>' : need > 0 && Math.abs(df) <= tol && pl + df > 0 ? '<span class="badge warn">' + (df > 0 ? '+' : '') + df + '명 — 마지막 조에 ' + (df > 0 ? '넣고' : '빼고') + ' 편성</span>' : '<span class="badge bad">인원 안 맞음 — 건너뜀</span>') + '</td></tr>'; }).join('');
+    const m = modal('<h2>계획대로 조편성</h2><p class="small muted">인원이 맞는 부문만 편성해요. 계획과 <b>' + tol + '명 이내</b>로 다르면 그 부문 마지막 조에 넣거나 빼고, 그날 시각을 다시 계산해요(설정 › planAbsorb). 편성한 뒤 같은 날 조가 겹치면 뒤로 밀어 맞춰요. 조는 <b>골고루 섞어서</b>(무작위 · 같은 성씨가 한 조에 몰리지 않게) 나누고, 조 안 순번(출석부)은 가나다순이에요. 이미 편성된 부문은 다시 편성되고(추첨번호·출석 지워짐), 채점이 시작된 부문은 건너뜁니다.</p><div class="scroll"><table><thead><tr><th>부문</th><th class="n">대상</th><th class="n">계획</th><th></th></tr></thead><tbody>' + lines + '</tbody></table></div>' +
       '<label class="inline" style="margin-top:12px"><input type="checkbox" id="far2" checked> 지방 참가자는 오후 조에 (그날 마지막 조 제외)</label><div class="row end" style="margin-top:12px"><button data-close>취소</button><button class="pri" id="go2">편성 실행</button></div>', { wide: true });
     $('#go2', m.el).addEventListener('click', e => {
       busy(e.target, true);
       call('applyPlan', { round: r, farAfternoon: $('#far2', m.el).checked }).then(res => {
         m.close(); refresh().then(() => {
-          modal('<h2>편성 결과</h2><div class="scroll"><table><tbody>' + res.map(x => '<tr><td>' + esc(GL(x.groupKey)) + '</td><td>' + (x.ok ? '<span class="badge ok">' + x.people + '명 · ' + x.sessions + '개 조</span>' + (x.far && (x.far.lastSlot || x.far.morning) ? ' <span class="badge warn">지방 ' + (x.far.lastSlot ? '마지막 조 ' + x.far.lastSlot + '명 ' : '') + (x.far.morning ? '오전 ' + x.far.morning + '명' : '') + '</span>' : (x.far && x.far.total ? ' <span class="small muted">지방 ' + x.far.total + '명 오후 배치</span>' : '')) : '<span class="badge bad">' + esc(x.msg) + '</span>') + '</td></tr>').join('') + '</tbody></table></div><div class="row end" style="margin-top:12px"><button class="pri" data-close>확인</button></div>');
+          const rt = (res.find(x => x.retimed) || {}).retimed || [];
+          modal('<h2>편성 결과</h2><div class="scroll"><table><tbody>' + res.filter(x => x.groupKey).map(x => '<tr><td>' + esc(GL(x.groupKey)) + '</td><td>' + (x.ok ? '<span class="badge ok">' + x.people + '명 · ' + x.sessions + '개 조</span>' + (x.absorbed ? ' <span class="badge warn">계획보다 ' + (x.absorbed > 0 ? '+' : '') + x.absorbed + '명 → 마지막 조에서 맞춤</span>' : '') + (x.far && (x.far.lastSlot || x.far.morning) ? ' <span class="badge warn">지방 ' + (x.far.lastSlot ? '마지막 조 ' + x.far.lastSlot + '명 ' : '') + (x.far.morning ? '오전 ' + x.far.morning + '명' : '') + '</span>' : (x.far && x.far.total ? ' <span class="small muted">지방 ' + x.far.total + '명 오후 배치</span>' : '')) : '<span class="badge bad">' + esc(x.msg) + '</span>') + '</td></tr>').join('') + '</tbody></table></div>' + movedNote(rt) + '<div class="row end" style="margin-top:12px"><button class="pri" data-close>확인</button></div>');
         });
       }).catch(err => { busy(e.target, false); onErr(err); });
     });
@@ -1189,18 +1242,19 @@ function attHTML(sid, kind) {
   const rows = list.slice().sort((a, b) => (a.perf == null ? 9999 + +a.seq : a.perf) - (b.perf == null ? 9999 + +b.seq : b.perf)), withP = list.some(e => KC.piecesFor(e.p, s.round).length);
   const att = e => e.attend === 'Y' ? '○' : e.attend === 'N' ? '불참' : '';
   const foot = '<span>총 ' + list.length + '명 (불참 ' + list.filter(e => e.attend === 'N').length + '명)</span><span>담당 ____________</span>';
-  if (withP) return pg('연주순서 출석부', [16, 15, 44, 36, 0, 13, 22], ['연주순서', '추첨번호', '이름 · 학교', '연락처', '곡목', '출석', '비고'],
-    rows.map(e => { const [a, g] = phs(e.p); return tr + '<td class="c"><b>' + (e.perf != null ? e.perf : '') + '</b></td><td class="c">' + esc(e.drawNo) + '</td><td><b>' + esc(e.p.name) + '</b><span class="sub">' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</span></td><td class="ph">' + esc(a) + (g ? '<span class="sub">보호자 ' + esc(g) + '</span>' : '') + '</td><td class="wr small">' + App.piecesHTML(KC.piecesFor(e.p, s.round)) + '</td><td class="c">' + att(e) + '</td><td></td></tr>'; }).join(''), foot);
-  return pg('연주순서 출석부', [18, 17, 28, 0, 34, 34, 13, 34], ['연주순서', '추첨번호', '이름', '학교·학년', '휴대폰', '보호자 휴대폰', '출석', '비고'],
-    rows.map(e => { const [a, g] = phs(e.p); return tr + '<td class="c"><b>' + (e.perf != null ? e.perf : '') + '</b></td><td class="c">' + esc(e.drawNo) + '</td><td><b>' + esc(e.p.name) + '</b></td><td>' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</td><td class="ph">' + esc(a) + '</td><td class="ph">' + esc(g) + '</td><td class="c">' + att(e) + '</td><td></td></tr>'; }).join(''), foot);
+  // 연주순서 = 조 안에서 몇 번째(1번부터) · 추첨번호 = 부문 안에서 이어지는 번호(추첨번호표·심사위원 경연순번) · 순번 = 처음 편성 순번
+  if (withP) return pg('연주순서 출석부', [15, 15, 12, 42, 34, 0, 12, 18], ['연주순서', '추첨번호', '순번', '이름 · 학교', '연락처', '곡목', '출석', '비고'],
+    rows.map(e => { const [a, g] = phs(e.p); return tr + '<td class="c"><b>' + (e.drawNo ? esc(e.drawNo) : '') + '</b></td><td class="c">' + (e.perf != null ? e.perf : '') + '</td><td class="c">' + e.seq + '</td><td><b>' + esc(e.p.name) + '</b><span class="sub">' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</span></td><td class="ph">' + esc(a) + (g ? '<span class="sub">보호자 ' + esc(g) + '</span>' : '') + '</td><td class="wr small">' + App.piecesHTML(KC.piecesFor(e.p, s.round)) + '</td><td class="c">' + att(e) + '</td><td></td></tr>'; }).join(''), foot);
+  return pg('연주순서 출석부', [16, 16, 12, 28, 0, 34, 34, 13, 24], ['연주순서', '추첨번호', '순번', '이름', '학교·학년', '휴대폰', '보호자 휴대폰', '출석', '비고'],
+    rows.map(e => { const [a, g] = phs(e.p); return tr + '<td class="c"><b>' + (e.drawNo ? esc(e.drawNo) : '') + '</b></td><td class="c">' + (e.perf != null ? e.perf : '') + '</td><td class="c">' + e.seq + '</td><td><b>' + esc(e.p.name) + '</b></td><td>' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</td><td class="ph">' + esc(a) + '</td><td class="ph">' + esc(g) + '</td><td class="c">' + att(e) + '</td><td></td></tr>'; }).join(''), foot);
 }
-// 추첨 번호표 — 여러 조를 빈칸 없이 이어서, 한 장에 24개(4칸 × 6줄). 칸마다 부문·조·날짜가 있어 잘라서 나누기 쉬움
+// 추첨 번호표 — 번호는 부문 안에서 이어짐(1조 1~10, 2조 11~20 …). 여러 조를 빈칸 없이 이어서 한 장에 24개(4칸 × 6줄)
 function slipPages(sids) {
   const cells = [];
   sids.forEach(sid => {
     const s = D.sessions.find(x => x.sessionId === sid); if (!s) return;
-    const n = D.entries.filter(e => e.sessionId === sid).length;
-    for (let i = 1; i <= n; i++) cells.push('<div class="slip"><small><b style="font-size:9pt;display:inline;margin:0">' + esc(GL(s.groupKey)) + ' ' + esc(s.label) + '</b><br>' + esc(fmtDate(s.date)) + ' · ' + esc(rname(s.round)) + ' 추첨</small><b>' + i + '</b><div class="ln">이름</div><div class="ln">학교/학년</div></div>');
+    const n = D.entries.filter(e => e.sessionId === sid).length, off = drawOffset(s);
+    for (let i = 1; i <= n; i++) cells.push('<div class="slip"><small><b style="font-size:9pt;display:inline;margin:0">' + esc(GL(s.groupKey)) + ' ' + esc(s.label) + '</b><br>' + esc(fmtDate(s.date)) + ' · ' + esc(rname(s.round)) + ' 추첨</small><b>' + (off + i) + '</b><div class="ln">이름</div><div class="ln">학교/학년</div></div>');
   });
   let h = ''; for (let i = 0; i < cells.length; i += 24) h += '<div class="pg pr"><div class="slips">' + cells.slice(i, i + 24).join('') + '</div></div>';
   return h;
@@ -1216,16 +1270,17 @@ function drawCard() {
   const s = D.sessions.find(x => x.sessionId === PSES); if (!s) return '';
   const { list } = sessionRows(PSES), rows = list.slice().sort((a, b) => a.seq - b.seq), n = rows.length, off = drawOffset(s);
   return '<div class="card" id="drc"><div class="row" style="flex-wrap:wrap"><h2 style="margin:0">추첨번호 입력 → 연주순서</h2><span class="sp"></span><button class="sm" id="dra">빈칸 무작위로 채우기</button><button class="sm" id="drx">번호 모두 비우기</button><button class="pri" id="drs">저장</button><button id="drp">저장하고 연주순서 출석부 인쇄</button></div>' +
-    '<p class="small muted"><b>' + esc(GL(s.groupKey)) + ' ' + esc(s.label) + '</b> · ' + n + '명. 현장에서 뽑은 추첨번호를 출석부(가나다순) 순서대로 옮겨 적어 주세요 — <b>엔터</b>를 누르면 다음 칸으로 가요. 연주순서 = 앞 조 인원(' + off + '명) + 추첨번호라서 이 조는 <b>' + (off + 1) + '~' + (off + n) + '번</b>이에요. 번호를 넣으면 출석, 불참에 체크하면 번호 없이 불참으로 저장돼요.</p>' +
-    '<div class="scroll"><table class="drt"><thead><tr><th class="n">순번</th><th>이름</th><th>학교·학년</th><th>휴대폰</th><th>추첨번호</th><th class="n">연주순서</th><th class="c">불참</th></tr></thead><tbody>' +
+    '<p class="small muted"><b>' + esc(GL(s.groupKey)) + ' ' + esc(s.label) + '</b> · ' + n + '명. 현장에서 뽑은 추첨번호를 출석부(가나다순) 순서대로 옮겨 적어 주세요 — <b>엔터</b>를 누르면 다음 칸으로 가요. ' +
+      '추첨번호는 부문 안에서 이어져서 이 조는 <b>' + (off + 1) + '~' + (off + n) + '번</b>(추첨번호표 번호 = 심사위원 화면의 경연순번), <b>연주순서</b>는 조 안에서 1번부터예요. 번호를 넣으면 출석, 불참에 체크하면 번호 없이 불참으로 저장돼요.</p>' +
+    '<div class="scroll"><table class="drt"><thead><tr><th class="n">순번</th><th>이름</th><th>학교·학년</th><th>휴대폰</th><th>추첨번호 <span class="small muted">' + (off + 1) + '~' + (off + n) + '</span></th><th class="n">연주순서</th><th class="c">불참</th></tr></thead><tbody>' +
     rows.map(e => '<tr data-e="' + esc(e.entryId) + '"><td class="n">' + e.seq + '</td><td><b>' + esc(e.p.name) + '</b> <span class="small muted">' + esc(fmtBirth(e.p.birth)) + '</span></td><td class="small">' + esc(e.p.school) + ' ' + esc(e.p.grade) + '</td><td class="small num">' + esc(App.fmtPhone(e.p.phone)) + '</td>' +
-      '<td><input class="dn" inputmode="numeric" maxlength="3" autocomplete="off" aria-label="' + esc(e.p.name) + ' 추첨번호" value="' + esc(e.drawNo) + '" style="width:84px;min-height:38px;padding:4px 8px;font-size:17px;font-weight:700;text-align:center"></td><td class="n po" style="font-weight:700"></td><td class="c"><input type="checkbox" class="ab" aria-label="' + esc(e.p.name) + ' 불참"' + (e.attend === 'N' ? ' checked' : '') + '></td></tr>').join('') +
+      '<td><input class="dn" inputmode="numeric" maxlength="3" autocomplete="off" aria-label="' + esc(e.p.name) + ' 추첨번호" value="' + (e.drawNo ? off + (+e.drawNo) : '') + '" style="width:84px;min-height:38px;padding:4px 8px;font-size:17px;font-weight:700;text-align:center"></td><td class="n po" style="font-weight:700"></td><td class="c"><input type="checkbox" class="ab" aria-label="' + esc(e.p.name) + ' 불참"' + (e.attend === 'N' ? ' checked' : '') + '></td></tr>').join('') +
     '</tbody></table></div><p id="drm" class="small" style="margin:8px 0 0"></p></div>';
 }
 function bindDraw() {
   const c = $('#drc'); if (!c) return;
   const trs = $$('tr[data-e]', c), n = trs.length, off = drawOffset(D.sessions.find(x => x.sessionId === PSES));
-  const ok = v => /^\d+$/.test(v) && +v >= 1 && +v <= n;
+  const ok = v => /^\d+$/.test(v) && +v >= off + 1 && +v <= off + n;
   const check = () => {
     const cnt = {}; let bad = 0, filled = 0, absent = 0;
     trs.forEach(tr => { const v = $('.dn', tr).value.trim(); if (!$('.ab', tr).checked && ok(v)) cnt[+v] = (cnt[+v] || 0) + 1; });
@@ -1233,10 +1288,10 @@ function bindDraw() {
       const i = $('.dn', tr), a = $('.ab', tr).checked, v = i.value.trim(), b = !a && !!v && (!ok(v) || cnt[+v] > 1);
       if (a) absent++; else if (b) bad++; else if (v) filled++;
       i.classList.toggle('bad', b); i.disabled = a;
-      $('.po', tr).textContent = a ? '불참' : v && !b ? String(off + +v) : '';
+      $('.po', tr).textContent = a ? '불참' : v && !b ? (+v - off) + '번' : '';
     });
-    const miss = []; for (let k = 1; k <= n; k++) if (!cnt[k]) miss.push(k);
-    $('#drm', c).innerHTML = '입력 <b>' + filled + '</b> / ' + (n - absent) + '명' + (absent ? ' · 불참 ' + absent + '명' : '') + (bad ? ' · <b style="color:var(--bad)">빨간 칸 ' + bad + '개 — 1~' + n + ' 사이, 겹치지 않게</b>' : '') + (miss.length && miss.length < n ? ' · 아직 안 쓴 번호: ' + miss.join(', ') : '');
+    const miss = []; for (let k = off + 1; k <= off + n; k++) if (!cnt[k]) miss.push(k);
+    $('#drm', c).innerHTML = '입력 <b>' + filled + '</b> / ' + (n - absent) + '명' + (absent ? ' · 불참 ' + absent + '명' : '') + (bad ? ' · <b style="color:var(--bad)">빨간 칸 ' + bad + '개 — ' + (off + 1) + '~' + (off + n) + ' 사이, 겹치지 않게</b>' : '') + (miss.length && miss.length < n ? ' · 아직 안 쓴 번호: ' + miss.join(', ') : '');
     return bad;
   };
   const dirty = () => { DRDIRTY = true; check(); };
@@ -1248,17 +1303,17 @@ function bindDraw() {
   });
   $('#dra', c).addEventListener('click', () => {
     const used = new Set(trs.filter(tr => !$('.ab', tr).checked).map(tr => $('.dn', tr).value.trim()).filter(ok).map(Number));
-    const free = []; for (let k = 1; k <= n; k++) if (!used.has(k)) free.push(k);
+    const free = []; for (let k = off + 1; k <= off + n; k++) if (!used.has(k)) free.push(k);
     for (let k = free.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [free[k], free[j]] = [free[j], free[k]]; }
     let f = 0; trs.forEach(tr => { const i = $('.dn', tr); if (!$('.ab', tr).checked && !i.value.trim() && f < free.length) i.value = free[f++]; });
     dirty();
   });
   $('#drx', c).addEventListener('click', () => confirmBox('이 조의 추첨번호를 모두 비울까요? (저장해야 반영돼요)', '비우기', true).then(y => { if (!y) return; trs.forEach(tr => { $('.dn', tr).value = ''; }); dirty(); }));
   const save = (btn, after) => {
-    if (check()) { toast('빨간 칸을 먼저 고쳐 주세요 (1~' + n + ' 사이, 겹치지 않게)', 'bad'); return; }
+    if (check()) { toast('빨간 칸을 먼저 고쳐 주세요 (' + (off + 1) + '~' + (off + n) + ' 사이, 겹치지 않게)', 'bad'); return; }
     busy(btn, true);
     const sid = PSES;
-    call('saveDraws', { sessionId: sid, rows: trs.map(tr => ({ entryId: tr.dataset.e, drawNo: $('.dn', tr).value.trim(), absent: $('.ab', tr).checked })) }).then(r => {
+    call('saveDraws', { sessionId: sid, rows: trs.map(tr => { const v = $('.dn', tr).value.trim(); return { entryId: tr.dataset.e, drawNo: v ? String(+v - off) : '', absent: $('.ab', tr).checked }; }) }).then(r => {
       DRDIRTY = false;
       toast('저장했어요 — 번호 ' + r.drawn + '명' + (r.absent ? ' · 불참 ' + r.absent + '명' : '') + (r.left ? ' · 아직 ' + r.left + '명 남음' : ''), 'ok');
       return refresh().then(() => { if (after) after(sid); });
@@ -1302,7 +1357,7 @@ function doPrint(kind) {
     const info = D.cfg, html = bySeq.map(e => { const v = { id: e.p.id, name: e.p.name, birth: e.p.birth, school: e.p.school, grade: e.p.grade, groupLabel: GL(e.p.groupKey), token: e.p.token, rounds: { [s.round]: { name: rname(s.round), session: s } } }; return '<div class="pg pr">' + App.receiptHTML(info, v, s.round) + '</div>'; }).join('');
     App.printHTML(html);
   }
-  if (kind === 'xls') App.writeXlsx([{ name: GL(s.groupKey) + ' ' + s.label, rows: [['순번', '추첨번호', '연주순서', '이름', '생년월일', '학교', '학년', '휴대폰', '보호자', '보호자 휴대폰', '출석', '출석시각', '곡목']].concat(bySeq.map(e => [+e.seq, e.drawNo, e.perf == null ? '' : e.perf, e.p.name, e.p.birth, e.p.school, e.p.grade, e.p.phone, e.p.guardianName, e.p.guardianPhone, e.attend, e.checkinAt, PT(e.p, s.round)])) }], GL(s.groupKey).replace(/\s/g, '') + '_' + s.label + '_' + s.date + '.xlsx');
+  if (kind === 'xls') App.writeXlsx([{ name: GL(s.groupKey) + ' ' + s.label, rows: [['순번', '추첨번호', '연주순서(조 안)', '이름', '생년월일', '학교', '학년', '휴대폰', '보호자', '보호자 휴대폰', '출석', '출석시각', '곡목']].concat(bySeq.map(e => [+e.seq, e.perf == null ? '' : e.perf, e.drawNo ? +e.drawNo : '', e.p.name, e.p.birth, e.p.school, e.p.grade, e.p.phone, e.p.guardianName, e.p.guardianPhone, e.attend, e.checkinAt, PT(e.p, s.round)])) }], GL(s.groupKey).replace(/\s/g, '') + '_' + s.label + '_' + s.date + '.xlsx');
 }
 
 /* ================= 심사위원 ================= */

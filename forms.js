@@ -153,11 +153,11 @@ var FM = (function () {
     var sheets = sesOf(L, { round: round, groupKey: opt.groupKey, sessionIds: opt.sessionIds, dates: opt.dates }).map(function (x) {
       var rows = (L.entries || []).filter(function (e) { return e.sessionId === x.sessionId; }).sort(function (a, b) { return (+a.seq || 0) - (+b.seq || 0); }).map(function (e) {
         var p = pm[e.pid] || {};
-        return { 순번: s(e.seq), 접수번호: s(p.id), 성명: s(p.name), 생년월일: s(p.birth), 학교: s(p.school), 학년: s(p.grade), 비고: s(e.note) };
+        return { 순번: s(e.seq), 접수번호: s(p.id), 성명: s(p.name), 생년월일: s(p.birth), 학교: s(p.school), 학년: s(p.grade), 휴대폰: phoneFmt(p.phone), 보호자휴대폰: phoneFmt(p.guardianPhone) === phoneFmt(p.phone) ? '' : phoneFmt(p.guardianPhone), 비고: s(e.note) };
       });
       return { name: sheetName(x, used), fields: sesFields(L, x, round), rows: rows };
     });
-    return { sheets: sheets, headers: [['조별순서', '순번'], ['접수번호', '접수번호'], ['성명', '성명'], ['생년월일', '생년월일'], ['학교', '학교'], ['학년', '학년'], ['출석', ''], ['추첨번호', ''], ['비고', '비고']] };
+    return { sheets: sheets, headers: [['순번', '순번'], ['접수번호', '접수번호'], ['성명', '성명'], ['생년월일', '생년월일'], ['학교', '학교'], ['학년', '학년'], ['휴대폰', '휴대폰'], ['보호자 휴대폰', '보호자휴대폰'], ['출석', ''], ['추첨번호', ''], ['비고', '비고']] };
   }
   function attPerf(L, opt) {
     var pm = pmap(L), used = {}, round = opt.round || 'R1', warn = [];
@@ -170,12 +170,13 @@ var FM = (function () {
       var absent = 0;
       var rows = list.map(function (e) {
         var p = pm[e.pid] || {}; if (e.attend === 'N') absent++;
-        return { 경연순번: po.order[e.entryId] == null ? '' : String(po.order[e.entryId]), 추첨번호: s(e.drawNo), 성명: s(p.name), 학교: s(p.school), 학년: s(p.grade), 출석: e.attend === 'N' ? '불참' : e.attend === 'Y' ? '○' : '', 비고: s(e.note) };
+        // 연주순서 = 조 안 몇 번째 · 추첨번호 = 부문 안에서 이어지는 번호(심사위원 경연순번) · 순번 = 처음 편성 순번
+        return { 연주순서: s(e.drawNo), 추첨번호: po.order[e.entryId] == null ? '' : String(po.order[e.entryId]), 순번: s(e.seq), 성명: s(p.name), 학교: s(p.school), 학년: s(p.grade), 휴대폰: phoneFmt(p.phone), 보호자휴대폰: phoneFmt(p.guardianPhone) === phoneFmt(p.phone) ? '' : phoneFmt(p.guardianPhone), 출석: e.attend === 'N' ? '불참' : e.attend === 'Y' ? '○' : '', 비고: s(e.note) };
       });
       var f = sesFields(L, x, round); f.불참 = String(absent);
       return { name: sheetName(x, used), fields: f, rows: rows };
     });
-    return { sheets: sheets, warn: warn, headers: [['경연순번', '경연순번'], ['추첨번호', '추첨번호'], ['성명', '성명'], ['학교', '학교'], ['학년', '학년'], ['출석', '출석'], ['비고', '비고']] };
+    return { sheets: sheets, warn: warn, headers: [['연주순서', '연주순서'], ['추첨번호', '추첨번호'], ['순번', '순번'], ['성명', '성명'], ['학교', '학교'], ['학년', '학년'], ['휴대폰', '휴대폰'], ['보호자 휴대폰', '보호자휴대폰'], ['출석', '출석'], ['비고', '비고']] };
   }
   /* 예선 종이 채점표 — 심사위원 × 심사일마다, 한 장에 60칸 (왼쪽 1~30번째, 오른쪽 31~60번째)
    * 그날 그 심사위원이 맡은 조를 경연순번대로 이어 붙이고, 조가 바뀌는 칸에 '▶ 2조 10:30' 표시.

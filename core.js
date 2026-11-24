@@ -58,6 +58,7 @@ var KC = (function () {
     themeColor: '#8a1c3c',
     fee: '200000',
     adminPassword: '',       // 책임 관리자 비밀번호 — 처음 로그인할 때 해시로 바뀌어 저장됨 (시트에서 안 보임)
+    planAbsorb: '2',          // '계획대로 조편성'에서 계획과 대상이 이만큼(명) 다르면 마지막 조에 넣고/빼고 시각 다시 계산 (0이면 안 함)
     ownerName: '',           // 책임 관리자 이름 (기록용, 비우면 담당자 이름)
     admins: '',              // 다른 관리자들 [{id,name,h,on,last}] — 설정 › 관리자 계정에서 관리 (비밀번호는 해시)
     loginLock: '',           // 로그인 실패 기록 (여러 번 틀리면 잠깐 막음)
@@ -336,6 +337,63 @@ var KC = (function () {
     });
     return out;
   }
+  /* 그날 조 시각 다시 맞추기 — 인원이 늘었거나 두 부문이 같은 시각에 잡혀 겹칠 때
+   *  부문끼리 모아(그날 처음 시작이 이른 부문부터 · opt.order가 있으면 그 순서 · 같은 시각이면 opt.late 부문을 뒤로) 조 번호 순으로 놓고,
+   *  조 길이는 지금 인원 × 1인 시간으로 다시 셈. 조 사이는 그날 시간표 계획(N조마다 쉬기 · 조 사이 분), 없으면 설정의 조 사이 분.
+   *  기본은 '뒤로만 밀기'(원래 시각보다 앞당기지 않음, 일부러 둔 빈 시간은 그대로) · opt.pack이면 첫 조부터 빈틈없이 다시 짬
+   *  오전 마감을 15분 넘게 넘기는 조 · 원래 오후였던 조는 점심 뒤로
+   *  list: [{sessionId, groupKey, no, label, startTime, count, perSec}] → { items: [{sessionId, groupKey, label, n, from, start, end, draw, moved}], end, warn, moved } */
+  function retimeDay(cfg, list, day, opt) {
+    opt = opt || {}; day = day || {};
+    var gap = s(day.gap) !== '' ? +day.gap : (+cfg.sessionGap || 10), lunchMin = +day.lunchMin || +cfg.lunchMin || 60, lead = +cfg.drawLeadMin || 30;
+    var amEnd = toMin(day.amEnd || cfg.amEnd || '12:00'), pmStart = toMin(day.pmStart || cfg.pmStart || '13:00');
+    var every = +day.restEvery || 0, restLen = +day.restMin || 10, TOL = 15;
+    var L = (list || []).filter(function (x) { return toMin(normTime(x.startTime)) != null; });
+    if (!L.length) return { items: [], end: '', warn: [], moved: 0 };
+    var first = {}, rank = {};
+    L.forEach(function (x) { var m = toMin(normTime(x.startTime)); if (first[x.groupKey] == null || m < first[x.groupKey]) first[x.groupKey] = m; });
+    (opt.order || []).forEach(function (g, i) { rank[g] = i + 1; });
+    var rk = function (g) { return rank[g] || 999; };
+    L = L.slice().sort(function (a, b) {
+      return rk(a.groupKey) - rk(b.groupKey) || first[a.groupKey] - first[b.groupKey] || (a.groupKey === opt.late) - (b.groupKey === opt.late) || groupKeyCmp(a.groupKey, b.groupKey) || (+a.no || 0) - (+b.no || 0);
+    });
+    var t = Math.min.apply(null, L.map(function (x) { return toMin(normTime(x.startTime)); }));
+    if (opt.start && toMin(normTime(opt.start)) != null) t = toMin(normTime(opt.start));
+    var lunchDone = t >= amEnd, prevEnd = null, sc = 0, items = [], warn = [];
+    L.forEach(function (x) {
+      var o = toMin(normTime(x.startTime)), per = +x.perSec || +cfg.perSec || 200, n = +x.count || 0, d = durMin(cfg, n, per);
+      var st = opt.pack ? t : Math.max(o, t);
+      // 점심 뒤로: 원래 오후 조이거나, (밀려서) 오전 마감을 15분 넘게 넘기게 된 조 — 원래부터 그 시각이던 조는 그대로 둠
+      var over = st + d > amEnd + TOL && (opt.pack || (st > o && o + d <= amEnd + TOL));
+      if (!lunchDone && ((!opt.pack && o >= pmStart) || over)) {
+        lunchDone = true; sc = 0;
+        if (prevEnd != null) { var le = Math.max(prevEnd + lunchMin, pmStart); st = opt.pack ? le : Math.max(o, le); }
+      }
+      items.push({ sessionId: x.sessionId, groupKey: x.groupKey, label: s(x.label) || (x.no + '조'), n: n, from: fromMin(o), start: fromMin(st), end: fromMin(st + d), draw: fromMin(st - lead), moved: st !== o });
+      prevEnd = st + d; sc++;
+      t = prevEnd + (every && sc % every === 0 ? restLen : gap);
+    });
+    var end = fromMin(prevEnd), lim = s(day.endBy) || s(cfg.dayLatest) || '18:00';
+    if (toMin(end) > toMin(normTime(lim))) warn.push('끝나는 시각이 ' + end + '로, ' + normTime(lim) + '보다 ' + (toMin(end) - toMin(normTime(lim))) + '분 늦어요');
+    return { items: items, end: end, warn: warn, moved: items.filter(function (i) { return i.moved; }).length };
+  }
+  // 서버: 날짜마다 다시 맞춰 저장 (채점이 시작된 날은 건드리지 않음) → 옮긴 조 목록
+  function retimeDates(db, round, dates, opt) {
+    var cfg = db.cfg(), cnt = {}, moved = [], skipped = [], scored = {};
+    db.t('Entries').forEach(function (e) { cnt[e.sessionId] = (cnt[e.sessionId] || 0) + 1; });
+    db.t('Scores').forEach(function (x) { if (x.sessionId) scored[x.sessionId] = 1; });
+    var seen = {};
+    (dates || []).map(normDate).filter(function (d) { if (!d || seen[d]) return false; seen[d] = 1; return true; }).forEach(function (d) {
+      var ses = db.t('Sessions').filter(function (x) { return x.round === round && x.date === d; });
+      if (!(opt && opt.force) && ses.some(function (x) { return scored[x.sessionId]; })) { skipped.push(d); return; }
+      var day = db.t('Plan').filter(function (x) { return x.round === round && x.date === d; })[0];
+      var r = retimeDay(cfg, ses.map(function (x) { return { sessionId: x.sessionId, groupKey: x.groupKey, no: x.no, label: x.label, startTime: x.startTime, perSec: x.perSec, count: cnt[x.sessionId] || 0 }; }), day, opt);
+      var upd = r.items.map(function (i) { return { sessionId: i.sessionId, startTime: i.start, endTime: i.end, drawTime: i.draw }; });
+      if (upd.length) db.upsert('Sessions', upd);
+      r.items.forEach(function (i) { if (i.moved) moved.push({ date: d, groupKey: i.groupKey, label: i.label, from: i.from, to: i.start }); });
+    });
+    return { moved: moved, skipped: skipped };
+  }
   // 부문·구분별 1인 시간 기본값: '첼로 초등부=3:30, 첼로=3:00' 처럼 구분까지 맞는 것 먼저
   function perSecDefault(cfg, groupKey, round) {
     var g = s(groupKey).split('|'), div = g[0], cat = normCategory((g[1] || '').replace(/\((남|여)\)/, '')), best = null;
@@ -596,6 +654,13 @@ var KC = (function () {
       list.forEach(function (e) { out[e.entryId] = s(e.drawNo) ? offset + (+e.drawNo) : null; });
       offset += list.length;
     });
+    return out;
+  }
+  // 조마다 앞 조 인원 합 — 추첨번호(부문 안에서 이어지는 번호) = 앞 조 인원 + 조 안 연주순서
+  function sessionOffsets(db, round, groupKey) {
+    var cnt = {}, off = 0, out = {};
+    entriesOf(db, round, groupKey).forEach(function (e) { cnt[e.sessionId] = (cnt[e.sessionId] || 0) + 1; });
+    sessionsOf(db, round, groupKey).forEach(function (x) { out[x.sessionId] = off; off += cnt[x.sessionId] || 0; });
     return out;
   }
   function recalcSessionEnd(db, cfg, sessionIds) {
@@ -1348,8 +1413,10 @@ var KC = (function () {
     var oldSes = sessionsOf(db, round, gk).map(function (x) { return x.sessionId; });
     db.replaceWhere('Sessions', function (x) { return oldSes.indexOf(x.sessionId) >= 0; }, sessions);
     db.replaceWhere('Entries', function (e) { return e.round === round && oldIds[e.pid]; }, entries);
-    db.log('admin', 'generateSessions', { round: round, group: gk, sessions: sessions.length, people: n, order: order, far: farStat });
-    return { sessions: sessions.length, people: n, order: order, far: farStat };
+    // 같은 날 다른 부문과 겹치면 뒤로 밀어 맞춤 (인원이 늘었거나 같은 시각에 잡힌 경우) — 새로 편성한 부문이 같은 시각이면 뒤로
+    var rt = p.retime === false ? { moved: [], skipped: [] } : retimeDates(db, round, sessions.map(function (x) { return x.date; }), { late: gk });
+    db.log('admin', 'generateSessions', { round: round, group: gk, sessions: sessions.length, people: n, order: order, far: farStat, moved: rt.moved.length });
+    return { sessions: sessions.length, people: n, order: order, far: farStat, moved: rt.moved };
   });
 
   function eligibleOf(db, round, gk) {
@@ -1373,7 +1440,28 @@ var KC = (function () {
   // 계획대로 조편성: 부문마다 계획의 조(날짜·시각·인원·1인 시간)를 그대로 써서 편성. 인원이 안 맞는 부문은 건너뜀
   def('applyPlan', 'admin', true, function (db, p) {
     var cfg = db.cfg(), round = p.round === 'R2' ? 'R2' : 'R1';
-    var days = db.t('Plan').filter(function (x) { return x.round === round; });
+    var days = db.t('Plan').filter(function (x) { return x.round === round; }).map(function (x) { return Object.assign({}, x); });
+    var only0 = p.groupKeys && p.groupKeys.length ? p.groupKeys : null, absorbed = {};
+    // 계획과 대상이 1~2명(설정 planAbsorb) 다르면: 그 부문 마지막 날 블록 인원을 맞추고(조 크기를 정해 뒀으면 마지막 조에서 더하거나 빼기) 그날 시각을 다시 계산
+    var tol = p.absorb === false ? 0 : (s(cfg.planAbsorb) !== '' ? +cfg.planAbsorb : 2);
+    if (tol > 0) {
+      var tot0 = planAll(cfg, days).totals, changed = {};
+      Object.keys(tot0).forEach(function (gk) {
+        if (only0 && only0.indexOf(gk) < 0) return;
+        var diff = eligibleOf(db, round, gk).length - tot0[gk];
+        if (!diff || Math.abs(diff) > tol) return;
+        var ds = days.filter(function (d) { return parseBlocks(d.blocks).some(function (b) { return s(b.groupKey) === gk; }); }).sort(function (a, b) { return cmpKo(a.date + (a.start || ''), b.date + (b.start || '')); });
+        var d = ds[ds.length - 1]; if (!d) return;
+        var bl = parseBlocks(d.blocks), b = bl.filter(function (x) { return s(x.groupKey) === gk; }).pop(), nc = (+b.count || 0) + diff;
+        if (nc <= 0) return;
+        b.count = nc;
+        var sz = s(b.sizes).split(/[^\d]+/).filter(Boolean).map(Number);
+        if (sz.length) { sz[sz.length - 1] += diff; while (sz.length && sz[sz.length - 1] <= 0) { var r0 = sz.pop(); if (sz.length) sz[sz.length - 1] += r0; } b.sizes = sz.join(','); }
+        d.blocks = JSON.stringify(bl); changed[d.dayId] = d; absorbed[gk] = diff;
+      });
+      var ch = Object.keys(changed).map(function (k) { return { dayId: k, blocks: changed[k].blocks }; });
+      if (ch.length) db.upsert('Plan', ch);
+    }
     var pa = planAll(cfg, days), byG = {};
     pa.days.forEach(function (r) {
       r.items.forEach(function (x) { if (x.type === 'session') (byG[x.groupKey] = byG[x.groupKey] || []).push({ date: r.day.date, startTime: x.start, endTime: x.end, count: x.n, perSec: x.perSec, venue: r.day.venue }); });
@@ -1385,8 +1473,8 @@ var KC = (function () {
       if (need !== planned) { out.push({ groupKey: gk, ok: false, msg: '대상 ' + need + '명인데 계획은 ' + planned + '명' }); return; }
       try {
         var extra = []; Object.keys(byG).forEach(function (g2) { if (g2 !== gk) byG[g2].forEach(function (x) { extra.push({ date: x.date, startTime: x.startTime }); }); });
-        var r = A.generateSessions.run(db, { round: round, groupKey: gk, slots: byG[gk], farAfternoon: p.farAfternoon !== false, force: !!p.force, order: p.order, extraStarts: extra });
-        out.push({ groupKey: gk, ok: true, sessions: r.sessions, people: r.people, far: r.far });
+        var r = A.generateSessions.run(db, { round: round, groupKey: gk, slots: byG[gk], farAfternoon: p.farAfternoon !== false, force: !!p.force, order: p.order, extraStarts: extra, retime: false });
+        out.push({ groupKey: gk, ok: true, sessions: r.sessions, people: r.people, far: r.far, absorbed: absorbed[gk] || 0 });
       } catch (e) { out.push({ groupKey: gk, ok: false, msg: e.message }); }
       db.invalidate();
     });
@@ -1395,8 +1483,21 @@ var KC = (function () {
       if (byG[gk]) return; var need = eligibleOf(db, round, gk).length;
       if (need) out.push({ groupKey: gk, ok: false, msg: '시간표 계획에 없어요 (대상 ' + need + '명)' });
     });
-    db.log('admin', 'applyPlan', round + ' ' + out.filter(function (x) { return x.ok; }).length + '개 부문');
+    // 마지막으로 계획 날짜마다 겹침 정리 (일부 부문만 다시 했거나 인원이 바뀐 경우)
+    var rt = retimeDates(db, round, pa.days.map(function (r) { return r.day.date; }), {});
+    if (rt.moved.length) out.push({ groupKey: '', ok: true, retimed: rt.moved });
+    db.log('admin', 'applyPlan', round + ' ' + out.filter(function (x) { return x.ok && x.groupKey; }).length + '개 부문');
     return out;
+  });
+
+  // 시간 점검 → '이 날 시각 맞추기'
+  def('retimeSessions', 'admin', true, function (db, p) {
+    var round = p.round === 'R2' ? 'R2' : 'R1', d = normDate(p.date);
+    if (!d) fail('날짜가 없어요.');
+    var r = retimeDates(db, round, [d], { order: p.order || null, pack: !!p.pack, start: s(p.start), force: !!p.force });
+    if (r.skipped.length) fail('이 날은 채점이 이미 시작돼서 시각을 자동으로 옮기지 않았어요. 조마다 시각을 직접 고쳐 주세요.');
+    db.log('admin', 'retimeSessions', round + ' ' + d + ' ' + r.moved.length + '개 조');
+    return r.moved;
   });
 
   def('saveSessions', 'admin', true, function (db, p) {
@@ -1569,7 +1670,7 @@ var KC = (function () {
       var q = pm[e.pid] || {};
       return { entryId: e.entryId, pid: e.pid, name: q.name, birth: q.birth, school: q.school, grade: q.grade, phone4: digits(q.phone).slice(-4), guardian: q.guardianName, seq: +e.seq, drawNo: s(e.drawNo), perfOrder: po[e.entryId], attend: s(e.attend), checkinAt: s(e.checkinAt), pieces: piecesFor(q, x.round) };
     }).sort(function (a, b) { return a.seq - b.seq; });
-    return { session: sessionView(x), round: x.round, roundName: roundCfg(cfg, x.round).name, groupKey: x.groupKey, groupLabel: groupLabel(x.groupKey), title: cfg.title, list: list, current: s(x.current) };
+    return { session: sessionView(x), round: x.round, roundName: roundCfg(cfg, x.round).name, groupKey: x.groupKey, groupLabel: groupLabel(x.groupKey), title: cfg.title, list: list, current: s(x.current), offset: sessionOffsets(db, x.round, x.groupKey)[x.sessionId] || 0 };
   });
 
   def('checkin', 'desk', true, function (db, p) {
@@ -2400,7 +2501,7 @@ var KC = (function () {
     normDate: normDate, normTime: normTime, cmpKo: cmpKo, digits: digits, randToken: randToken,
     parsePieces: parsePieces, normPieces: normPieces, piecesFor: piecesFor, pieceLine: pieceLine, piecesText: piecesText,
     splitDivision: splitDivision, normCategory: normCategory, pieceEditState: pieceEditState, regionOf: regionOf, isFar: isFar,
-    planDay: planDay, planAll: planAll, autoPlan: autoPlan, durMin: durMin, parseSec: parseSec, fmtSec: fmtSec, parseBlocks: parseBlocks,
+    planDay: planDay, retimeDay: retimeDay, planAll: planAll, autoPlan: autoPlan, durMin: durMin, parseSec: parseSec, fmtSec: fmtSec, parseBlocks: parseBlocks,
     withholding: withholding, prizeTable: prizeTable, prizeAmount: prizeAmount, workMinutes: workMinutes, staffPay: staffPay, weekKey: weekKey,
     parseIdText: parseIdText, parseBankText: parseBankText, judgeCovers: judgeCovers,
     parseJudgeRates: parseJudgeRates, judgeDayFee: judgeDayFee, parseDayInfo: parseDayInfo, dayInfoStr: dayInfoStr, isWeekend: isWeekend,

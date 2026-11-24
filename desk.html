@@ -104,16 +104,24 @@
     if (qq && !/^[A-Z0-9]{10}$/.test(qq)) list = list.filter(x => (x.name || '').indexOf(qq) >= 0 || String(x.pid) === qq || (x.school || '').indexOf(qq) >= 0);
     $('#tb').innerHTML = list.map(x => '<tr data-e="' + esc(x.entryId) + '" class="' + (x.attend === 'N' ? 'dim' : '') + '"><td class="n">' + x.seq + '</td><td><b>' + esc(x.name) + '</b><div class="small muted" style="display:none">' + esc(x.school) + '</div></td><td class="hide-m small">' + esc(x.school) + ' ' + esc(x.grade) + '</td><td class="hide-m num small">' + esc(fmtBirth(x.birth)) + '</td>' +
       '<td class="att"><div class="row" style="gap:4px;flex-wrap:nowrap"><button class="y ' + (x.attend === 'Y' ? 'on' : '') + '" data-a="Y">출석</button><button class="n ' + (x.attend === 'N' ? 'on' : '') + '" data-a="N">불참</button></div></td>' +
-      '<td class="c"><input class="dn" inputmode="numeric" value="' + esc(x.drawNo) + '" aria-label="' + esc(x.name) + ' 추첨번호"></td><td class="n"><b>' + (x.perfOrder != null ? x.perfOrder : '') + '</b></td></tr>').join('') ||
+      '<td class="c"><input class="dn" inputmode="numeric" value="' + (x.drawNo ? OFF() + (+x.drawNo) : '') + '" aria-label="' + esc(x.name) + ' 추첨번호"></td><td class="n"><b>' + (x.drawNo ? esc(x.drawNo) + '번' : '') + '</b></td></tr>').join('') ||
       '<tr><td colspan="7" class="muted c">검색 결과가 없어요. Enter를 누르면 다른 조까지 찾아봅니다.</td></tr>';
     $$('#tb tr[data-e]').forEach(tr => {
       const x = DATA.list.find(y => y.entryId === tr.dataset.e);
       $$('[data-a]', tr).forEach(b => b.addEventListener('click', () => setEntry(x, { attend: x.attend === b.dataset.a ? '' : b.dataset.a })));
       const inp = $('input.dn', tr);
-      inp.addEventListener('change', () => setEntry(x, { drawNo: inp.value.trim(), attend: inp.value.trim() ? 'Y' : x.attend }));
+      inp.addEventListener('change', () => { const dn = toDraw(inp.value); if (dn == null) { inp.value = x.drawNo ? OFF() + (+x.drawNo) : ''; return; } setEntry(x, { drawNo: dn, attend: dn ? 'Y' : x.attend }); });
     });
   }
 
+  // 추첨번호는 부문 안에서 이어지는 번호(2조면 11~20) — 저장은 조 안 순서(1~10)로
+  function OFF() { return +(DATA && DATA.offset) || 0; }
+  function toDraw(v) {
+    v = String(v || '').trim(); if (!v) return '';
+    const n = DATA.list.length, k = +v;
+    if (!/^\d+$/.test(v) || k < OFF() + 1 || k > OFF() + n) { toast('이 조 추첨번호는 ' + (OFF() + 1) + '~' + (OFF() + n) + '번이에요', 'bad'); return null; }
+    return String(k - OFF());
+  }
   function setEntry(x, patch) {
     api('setEntry', Object.assign({ entryId: x.entryId }, patch), 'desk').then(() => open(CUR, true)).catch(e => { onErr(e); open(CUR, true); });
   }
@@ -197,7 +205,7 @@
     $('#who').innerHTML = '<div class="who fade" data-e="' + esc(r.entryId) + '"><div class="row"><span class="badge ok">출석 완료</span>' + (r.warn ? '<span class="badge warn">' + esc(r.warn) + '</span>' : '') + '</div>' +
       '<div class="nm">' + esc(r.participant.name) + '</div><div class="muted">' + esc(r.participant.school || '') + ' ' + esc(r.participant.grade || '') + ' · 생년월일 <b>' + esc(fmtBirth(r.participant.birth)) + '</b>' + (x.guardian ? ' · 보호자 ' + esc(x.guardian) : '') + '</div>' +
       '<p class="small muted" style="margin:6px 0 10px">접수증·신분증의 이름과 생년월일을 확인한 뒤, 뽑은 추첨번호를 넣어 주세요.</p>' +
-      '<form class="row" id="wf"><label class="f" for="wdn" style="margin:0">추첨번호</label><input class="dn" id="wdn" inputmode="numeric" value="' + esc(r.drawNo || x.drawNo || '') + '"><button class="pri big">저장</button></form></div>';
+      '<form class="row" id="wf"><label class="f" for="wdn" style="margin:0">추첨번호 <span class="small muted">' + (OFF() + 1) + '~' + (OFF() + DATA.list.length) + '</span></label><input class="dn" id="wdn" inputmode="numeric" value="' + ((r.drawNo || x.drawNo) ? OFF() + (+(r.drawNo || x.drawNo)) : '') + '"><button class="pri big">저장</button></form></div>';
     bindWho();
     setTimeout(() => { const i = $('#wdn'); if (i) i.focus(); }, 50);
   }
@@ -205,9 +213,10 @@
     const f = $('#wf'); if (!f) return;
     f.addEventListener('submit', e => {
       e.preventDefault();
-      const eid = $('.who').dataset.e, v = $('#wdn').value.trim();
-      api('setEntry', { entryId: eid, drawNo: v, attend: 'Y' }, 'desk').then(() => {
-        toast(v ? '추첨번호 ' + v + '번 저장' : '저장했어요', 'ok');
+      const eid = $('.who').dataset.e, v = $('#wdn').value.trim(), dn = toDraw(v);
+      if (dn == null) return;
+      api('setEntry', { entryId: eid, drawNo: dn, attend: 'Y' }, 'desk').then(() => {
+        toast(v ? '추첨번호 ' + v + '번 저장 — 이 조 ' + dn + '번째 연주' : '저장했어요', 'ok');
         $('#q').value = ''; $('#who').innerHTML = '';
         open(CUR).then(() => $('#q').focus());
       }).catch(onErr);
@@ -246,8 +255,8 @@
     const list = d.list.slice().sort((a, b) => (a.perfOrder == null ? 9999 + a.seq : a.perfOrder) - (b.perfOrder == null ? 9999 + b.seq : b.perfOrder));
     const wp = list.some(x => x.pieces && x.pieces.length);
     App.printHTML('<div class="pr"><h1>' + esc(d.title) + ' — ' + esc(d.roundName) + ' 연주순서 출석부</h1><div class="meta"><span>' + esc(d.groupLabel) + ' ' + esc(se.label) + '</span><span>' + esc(fmtDate(se.date, true)) + ' 시작 ' + esc(se.startTime) + '</span><span>' + list.length + '명</span></div>' +
-      '<table><thead><tr><th>연주순서</th><th>조별순서</th><th>이름</th><th>학교·학년</th>' + (wp ? '<th>곡목</th>' : '<th>생년월일</th>') + '<th>출석</th><th>비고</th></tr></thead><tbody>' +
-      list.map(x => '<tr><td class="c"><b>' + (x.perfOrder != null ? x.perfOrder : '') + '</b></td><td class="c">' + esc(x.drawNo) + '</td><td>' + esc(x.name) + '</td><td>' + esc(x.school) + ' ' + esc(x.grade) + '</td>' + (wp ? '<td>' + App.piecesHTML(x.pieces) + '</td>' : '<td>' + esc(fmtBirth(x.birth)) + '</td>') + '<td class="c">' + (x.attend === 'Y' ? '○' : x.attend === 'N' ? '불참' : '') + '</td><td></td></tr>').join('') + '</tbody></table></div>');
+      '<table><thead><tr><th>연주순서</th><th>추첨번호</th><th>순번</th><th>이름</th><th>학교·학년</th>' + (wp ? '<th>곡목</th>' : '<th>생년월일</th>') + '<th>출석</th><th>비고</th></tr></thead><tbody>' +
+      list.map(x => '<tr><td class="c"><b>' + (x.drawNo ? esc(x.drawNo) : '') + '</b></td><td class="c">' + (x.perfOrder != null ? x.perfOrder : '') + '</td><td class="c">' + x.seq + '</td><td>' + esc(x.name) + '</td><td>' + esc(x.school) + ' ' + esc(x.grade) + '</td>' + (wp ? '<td>' + App.piecesHTML(x.pieces) + '</td>' : '<td>' + esc(fmtBirth(x.birth)) + '</td>') + '<td class="c">' + (x.attend === 'Y' ? '○' : x.attend === 'N' ? '불참' : '') + '</td><td></td></tr>').join('') + '</tbody></table></div>');
   }
 
   if (App.getToken('desk')) home(); else needLogin();

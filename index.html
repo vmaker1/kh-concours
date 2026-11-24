@@ -93,7 +93,7 @@
       '<dt>추첨 시각</dt><dd><b class="t">' + esc(se.drawTime) + '</b> <span class="muted small">이때까지 대기실 도착</span></dd>' +
       '<dt>경연 시작</dt><dd><b class="t">' + esc(se.startTime) + '</b> <span class="muted small">조 예상 종료 ' + esc(se.endTime) + '</span></dd>' +
       '<dt>장소</dt><dd>' + esc(se.venue) + '</dd>' +
-      '<dt>연주 순서</dt><dd>' + (r.drawNo ? '<b class="t">' + esc(r.perfOrder) + '번</b> <span class="muted small">(조 안에서 ' + esc(r.drawNo) + '번째)</span>' : '<span class="muted">현장 추첨으로 정해집니다</span>') + '</dd>' +
+      '<dt>연주 순서</dt><dd>' + (r.drawNo ? '<b class="t">' + esc(se.label || '') + ' ' + esc(r.drawNo) + '번째</b> <span class="muted small">(추첨번호 ' + esc(r.perfOrder) + '번)</span>' : '<span class="muted">현장 추첨으로 정해집니다</span>') + '</dd>' +
       '</dl>';
   }
   function resultBlock(r) {
