@@ -1551,9 +1551,9 @@ function accountCard() {
       '로그인을 여러 번 틀리면 잠깐 막아요 — 관리자 10분 안에 8번, 진행요원 PIN 20번, 심사위원 PIN 30번 틀리면 10분 동안 (이미 들어와 있는 화면은 그대로). 관리자 로그인까지 막혔는데 급하면 운영DB 시트 Config의 <b>loginLock</b> 값을 지우면 바로 풀려요.</p>' +
       (A.locks.length ? '<div class="note warn small" style="margin:8px 0">지금 막혀 있음: ' + A.locks.map(x => ({ admin: '관리자', desk: '진행요원', judge: '심사위원' })[x.role] + ' (' + x.min + '분 남음)').join(', ') + ' <button class="sm" id="unl">지금 풀기</button></div>' : '') +
       '<div class="scroll"><table><thead><tr><th>이름</th><th>권한</th><th>마지막 접속</th><th>상태</th><th></th></tr></thead><tbody>' +
-      '<tr><td><b>' + esc(A.owner) + '</b> <span class="small muted">(나)</span></td><td>책임 관리자 — 계정 관리</td><td></td><td><span class="badge ok">사용</span></td><td></td></tr>' +
+      '<tr><td><b>' + esc(A.owner) + '</b> <span class="small muted">(나)</span></td><td>책임 관리자 — 계정 관리</td><td></td><td><span class="badge ok">사용</span></td><td class="small muted">이름은 아래 \'로그인\' 칸의 책임 관리자 이름</td></tr>' +
       A.list.map(a => '<tr><td><b>' + esc(a.name) + '</b></td><td>관리자</td><td class="small">' + esc(String(a.last || '').slice(0, 16).replace('T', ' ')) + '</td><td>' + (a.on ? '<span class="badge ok">사용</span>' : '<span class="badge">중지</span>') + '</td>' +
-        '<td style="white-space:nowrap"><button class="sm" data-arp="' + esc(a.id) + '">비밀번호 다시 정하기</button><button class="sm" data-aon="' + esc(a.id) + '|' + (a.on ? '0' : '1') + '">' + (a.on ? '중지' : '다시 사용') + '</button><button class="sm danger" data-adel="' + esc(a.id) + '">삭제</button></td></tr>').join('') +
+        '<td style="white-space:nowrap"><button class="sm" data-arn="' + esc(a.id) + '|' + esc(a.name) + '">이름 바꾸기</button><button class="sm" data-arp="' + esc(a.id) + '">비밀번호 다시 정하기</button><button class="sm" data-aon="' + esc(a.id) + '|' + (a.on ? '0' : '1') + '">' + (a.on ? '중지' : '다시 사용') + '</button><button class="sm danger" data-adel="' + esc(a.id) + '">삭제</button></td></tr>').join('') +
       '</tbody></table></div>' +
       '<div class="row" style="gap:8px;margin-top:10px"><input id="an" placeholder="이름 (예: 김사무)" style="width:160px"><input id="ap" type="password" placeholder="첫 비밀번호 (8자 이상)" autocomplete="new-password" style="width:200px"><button class="pri" id="aadd">관리자 추가</button></div>' +
       '<p class="small muted" style="margin-top:4px">첫 비밀번호는 직접 전해 주고, 받은 사람이 설정 › 내 계정에서 바로 바꾸게 해 주세요. 운영DB 시트는 관리자에게 공유하지 않아도 이 화면으로 모든 일을 할 수 있어요.</p>' +
@@ -1563,6 +1563,11 @@ function accountCard() {
     $('#aadd').addEventListener('click', e => { busy(e.target, true); call('saveAdminAccount', { name: $('#an').value.trim(), password: $('#ap').value }).then(() => { toast('관리자를 추가했어요', 'ok'); accountCard(); }).catch(err => { busy(e.target, false); onErr(err); }); });
     $$('[data-aon]').forEach(b => b.addEventListener('click', () => { const [id, on] = b.dataset.aon.split('|'); call('saveAdminAccount', { id, on: on === '1' }).then(() => { toast(on === '1' ? '다시 쓸 수 있어요' : '중지했어요 — 바로 못 들어와요', 'ok'); accountCard(); }).catch(onErr); }));
     $$('[data-adel]').forEach(b => b.addEventListener('click', () => confirmBox('이 관리자를 삭제할까요? (기록은 남아요)', '삭제', true).then(ok => ok && call('saveAdminAccount', { id: b.dataset.adel, remove: true }).then(() => { toast('삭제했어요', 'ok'); accountCard(); }).catch(onErr))));
+    $$('[data-arn]').forEach(b => b.addEventListener('click', () => {
+      const [id, nm] = [b.dataset.arn.slice(0, b.dataset.arn.indexOf('|')), b.dataset.arn.slice(b.dataset.arn.indexOf('|') + 1)];
+      const m = modal('<h2>이름 바꾸기</h2><label class="f" for="rn">이름 (기록에 남는 이름)</label><input id="rn" value="' + esc(nm) + '"><div class="row end" style="margin-top:12px"><button data-close>취소</button><button class="pri" id="rgo">저장</button></div>');
+      $('#rgo', m.el).addEventListener('click', e => { const v = $('#rn', m.el).value.trim(); if (!v) { toast('이름을 넣어 주세요', 'bad'); return; } busy(e.target, true); call('saveAdminAccount', { id, name: v }).then(() => { m.close(); toast('이름을 바꿨어요', 'ok'); accountCard(); }).catch(err => { busy(e.target, false); onErr(err); }); });
+    }));
     $$('[data-arp]').forEach(b => b.addEventListener('click', () => {
       const m = modal('<h2>비밀번호 다시 정하기</h2><label class="f" for="rp">새 비밀번호 (8자 이상)</label><input id="rp" type="password" autocomplete="new-password"><div class="row end" style="margin-top:12px"><button data-close>취소</button><button class="pri" id="rgo">저장</button></div>');
       $('#rgo', m.el).addEventListener('click', e => { busy(e.target, true); call('saveAdminAccount', { id: b.dataset.arp, password: $('#rp', m.el).value }).then(() => { m.close(); toast('바꿨어요 — 새 비밀번호를 직접 전해 주세요', 'ok'); }).catch(err => { busy(e.target, false); onErr(err); }); });
